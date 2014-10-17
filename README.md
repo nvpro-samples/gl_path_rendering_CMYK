@@ -2,7 +2,7 @@
 
 TODO: write some guidance about this repo and how to use it
 
-![Example](https://github.com/nvpro-samples/gl_path_rendering_CMYK/raw/master/example/example.png)
+![Example](https://github.com/nvpro-samples/gl_path_rendering_CMYK/blob/master/doc/sample.JPG)
 
 ````
     Copyright (c) 2013, NVIDIA CORPORATION. All rights reserved.
