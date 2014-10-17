@@ -4,10 +4,10 @@ This sample shows how to use NVIDIA path rendering extension.
 
 It also exposes it through FBO (Frame-buffer-objects) and shows how to work on CMYK-Alpha format.
 
-__Note__: to make this sample work, cmake will require some tools to be accessible. We know how painfull it can be to
-find them back. So we packaged a zip file containing all needed.
-Download it from https://developer.nvidia.com/samples (Note: work in progress... need to upload the package in few days!)
-and unzip it at the same location where you downloaded the samples (separate repositories). ou should then have a folder named '//shared_external//'. cmake setup will be able to locate it.
+Additional repositories needed:
+* shared_sources
+* shared_external: contains some tools/libraries to be compiled and accessible for samples to link with.
+cmake can either locate them from this folder, or locate them if they are somewhere else in your computer.
 
 ![Example](https://github.com/nvpro-samples/gl_path_rendering_CMYK/blob/master/doc/sample.JPG)
 
