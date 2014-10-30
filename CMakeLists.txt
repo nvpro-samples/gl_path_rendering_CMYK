@@ -48,9 +48,9 @@ LIST(APPEND COMMON_SOURCE_FILES
   ${BASE_DIRECTORY}/shared_sources/nv_helpers_gl/WindowInertiaCamera.h
   ${BASE_DIRECTORY}/shared_sources/nv_helpers/TimeSampler.h
   ${BASE_DIRECTORY}/shared_sources/nv_helpers/InertiaCamera.h
-  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math.cpp
+  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math.inl
   ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math.h
-  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_mathdecl.h
+  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math_types.h
 )
 #####################################################################################
 # Executable
