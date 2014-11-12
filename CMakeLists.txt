@@ -18,7 +18,7 @@ if(NOT BASE_DIRECTORY)
     INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/../shared_sources/CMakeLists_include.txt)
   endif()
 endif()
-add_definitions(-DPROJECT_PATH="${PROJECT_SOURCE_DIR}")
+add_definitions(-DPROJECT_PATH="${PROJECT_SOURCE_DIR}/")
 add_definitions(-DPROJECT_NAME="${PROJNAME}")
 
 #####################################################################################

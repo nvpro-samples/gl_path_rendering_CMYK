@@ -32,6 +32,32 @@
 #   include "SvcMFCUI.h"
 #endif
 
+//
+// Camera animation: captured using '1' in the sample. Then copy and paste...
+//
+struct CameraAnim {    vec3f eye, focus; };
+static CameraAnim s_cameraAnim[] = {
+{vec3f(-1.26, 0.47, 1.01), vec3f(-0.96, 0.47, 0.00)},
+{vec3f(0.38, 0.34, 0.43), vec3f(0.37, 0.35, 0.14)},
+{vec3f(1.58, 0.54, 0.65), vec3f(0.65, 0.56, -0.06)},
+{vec3f(1.07, -1.91, 4.75), vec3f(0.07, -0.50, 0.22)},
+{vec3f(-3.41, 0.39, 2.76), vec3f(-0.96, -0.33, -0.28)},
+{vec3f(-0.94, -0.15, 0.69), vec3f(-0.96, -0.33, -0.28)},
+{vec3f(-0.25, -0.18, 0.67), vec3f(-0.27, -0.36, -0.29)},
+{vec3f(0.79, -0.26, 0.66), vec3f(0.77, -0.43, -0.30)},
+{vec3f(0.38, -0.98, 0.79), vec3f(0.36, -1.15, -0.16)},
+{vec3f(-1.46, -1.48, 0.05), vec3f(-0.58, -1.12, -0.41)},
+{vec3f(-1.64, -0.70, 0.30), vec3f(-0.76, -0.35, -0.16)},
+{vec3f(-1.13, -0.66, 1.39), vec3f(-0.76, -0.35, -0.16)},
+{vec3f(-0.20, -0.65, 3.05), vec3f(-0.20, -0.45, -0.11)},
+{vec3f(0.00, 0.00, 3.00), vec3f(0.00, 0.00, 0.00)},//14 items
+};
+static int     s_cameraAnimItem     = 0;
+static int     s_cameraAnimItems    = 14;
+#define ANIMINTERVALL 1.5f
+static float   s_cameraAnimIntervals= ANIMINTERVALL;
+static bool    s_bCameraAnim        = true;
+
 //-----------------------------------------------------------------------------
 // Derive the Window for this sample
 //-----------------------------------------------------------------------------
@@ -402,7 +428,7 @@ GLuint      g_vao = 0;
 //------------------------------------------------------------------------------
 // 
 //------------------------------------------------------------------------------
-void printMessage(int level, const char * txt)
+void sample_print(int level, const char * txt)
 {
 #ifdef USESVCUI
     logMFCUI(level, txt);
@@ -919,14 +945,15 @@ bool MyWindow::init()
     //
     // easy Toggles
     //
-    addToggleKey(' ', &m_realtime.bNonStopRendering, "space: toggles continuous rendering\n");
-    addToggleKey('b', &g_blendEnable, "'b': Blending Enable\n");
-    addToggleKey('c', &g_activeC, "'c': C component\n");
-    addToggleKey('m', &g_activeM, "'m': M component\n");
-    addToggleKey('y', &g_activeY, "'y': Y component\n");
-    addToggleKey('k', &g_activeK, "'k': K component\n");
-#ifdef USESVCUI
+    addToggleKeyToMFCUI(' ', &m_realtime.bNonStopRendering, "space: toggles continuous rendering\n");
+    addToggleKeyToMFCUI('b', &g_blendEnable, "'b': Blending Enable\n");
+    addToggleKeyToMFCUI('c', &g_activeC, "'c': C component\n");
+    addToggleKeyToMFCUI('m', &g_activeM, "'m': M component\n");
+    addToggleKeyToMFCUI('y', &g_activeY, "'y': Y component\n");
+    addToggleKeyToMFCUI('k', &g_activeK, "'k': K component\n");
     addToggleKeyToMFCUI('p', &g_usePathObj, "use Path rendering\n");
+    addToggleKeyToMFCUI('a', &s_bCameraAnim, "'a': animate camera\n");
+#ifdef USESVCUI
     g_pWinHandler->VariableBind(
         g_pWinHandler->CreateCtrlScalar("OBJS", "N Objs x&y", g_pToggleContainer)->SetBounds(0.0f, 100.0f)->SetIntMode(), 
         &g_NObjs);
@@ -997,14 +1024,6 @@ bool MyWindow::init()
 	    pCombo->SetUserData(this)->Register(&msaaUI);
         pCombo->SetSelectedByIndex(3);
     }
-    //
-    // CMYK mask
-    //
-    addToggleKeyToMFCUI('b', &g_blendEnable, "Blending Enable\n");
-    addToggleKeyToMFCUI('c', &g_activeC, "C component\n");
-    addToggleKeyToMFCUI('m', &g_activeM, "M component\n");
-    addToggleKeyToMFCUI('y', &g_activeY, "Y component\n");
-    addToggleKeyToMFCUI('k', &g_activeK, "K component\n");
     //
     // Blending Equations
     //
@@ -1214,6 +1233,9 @@ void MyWindow::keyboardchar(unsigned char key, int mods, int x, int y)
         case '4':
             blitMode = RESOLVERGBATOBACKBUFFER;
             LOGI("blitting using fullscreenquad and image to backbuffer\n");
+            break;
+        case '0':
+            m_camera.print_look_at();
             break;
         default:
             break;
@@ -1429,6 +1451,23 @@ void renderFullscreenQuad()
 void MyWindow::display()
 {
     NXPROFILEFUNC(__FUNCTION__);
+    WindowInertiaCamera::display();
+    //
+    // Simple camera change for animation
+    //
+    if(s_bCameraAnim)
+    {
+      float dt = (float)m_realtime.getTiming();
+      s_cameraAnimIntervals -= dt;
+      if(s_cameraAnimIntervals <= 0.0)
+      {
+          s_cameraAnimIntervals = ANIMINTERVALL;
+          m_camera.look_at(s_cameraAnim[s_cameraAnimItem].eye, s_cameraAnim[s_cameraAnimItem].focus);
+          s_cameraAnimItem++;
+          if(s_cameraAnimItem >= s_cameraAnimItems)
+              s_cameraAnimItem = 0;
+      }
+    }
 
     //glEnable(GL_FRAMEBUFFER_SRGB);
     //
@@ -1539,7 +1578,7 @@ void MyWindow::display()
 
     ///////////////////////////////////////////////
     // additional HUD stuff
-	WindowInertiaCamera::display();
+	WindowInertiaCamera::displayHUD();
 
     swapBuffers();
 }
