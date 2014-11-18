@@ -25,8 +25,8 @@
     feedback to tlorach@nvidia.com (Tristan Lorach)
 */ //--------------------------------------------------------------------
 #include "main.h"
-#include "WindowInertiaCamera.h"
-#include "GLSLProgram.h"
+#include "nv_helpers_gl/WindowInertiaCamera.h"
+#include "nv_helpers_gl/GLSLProgram.h"
 
 #ifdef USESVCUI
 #   include "SvcMFCUI.h"
@@ -1595,6 +1595,8 @@ int sample_main(int argc, const char** argv)
     3,      //minor;
     false,   //core;
     8,      //MSAA;
+    24,     //depth bits
+    8,      //stencil bits
     true,   //debug;
     false,  //robust;
     false,  //forward;
