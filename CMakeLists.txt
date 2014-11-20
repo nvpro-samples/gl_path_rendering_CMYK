@@ -8,18 +8,19 @@ Message(STATUS "Processing Project ${PROJNAME}:")
 # offer the choice of having shared_sources as a sub-folder... good for packaging a sample
 #
 # if BASE_DIRECTORY not defined, it means this cmake file was called as the first entry point and not included
-if(NOT BASE_DIRECTORY)
+if(NOT BASE_DIRECTORY) # if not defined, it means this cmake file was called as the first entry point and not included
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/shared_sources)
     Message(STATUS "found sub-folder shared_sources")
     SET(BASE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/shared_sources/CMakeLists_include.txt)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/shared_sources ${CMAKE_BINARY_DIR}/shared_sources)
   else()
     SET(BASE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
     INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/../shared_sources/CMakeLists_include.txt)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../shared_sources ${CMAKE_BINARY_DIR}/shared_sources)
   endif()
 endif()
-add_definitions(-DPROJECT_PATH="${PROJECT_SOURCE_DIR}/")
-add_definitions(-DPROJECT_NAME="${PROJNAME}")
+_add_project_definitions(${PROJNAME})
 
 #####################################################################################
 # additions from packages needed for this sample
@@ -40,18 +41,16 @@ file(GLOB SOURCE_FILES *.cpp *.hpp *.inl *.h *.c)
 #####################################################################################
 # additional files from helpers
 #
-LIST(APPEND COMMON_SOURCE_FILES 
-  ${BASE_DIRECTORY}/shared_sources/nv_helpers_gl/nv_dds.cpp
-  ${BASE_DIRECTORY}/shared_sources/nv_helpers_gl/nv_dds.h
-  ${BASE_DIRECTORY}/shared_sources/nv_helpers_gl/GLSLProgram.h
-  ${BASE_DIRECTORY}/shared_sources/nv_helpers_gl/GLSLProgram.cpp
-  ${BASE_DIRECTORY}/shared_sources/nv_helpers_gl/WindowInertiaCamera.h
-  ${BASE_DIRECTORY}/shared_sources/nv_helpers/TimeSampler.h
-  ${BASE_DIRECTORY}/shared_sources/nv_helpers/InertiaCamera.h
-  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math.inl
-  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math.h
-  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math_types.h
-)
+#LIST(APPEND COMMON_SOURCE_FILES 
+#  ${BASE_DIRECTORY}/shared_sources/nv_helpers_gl/GLSLProgram.h
+#  ${BASE_DIRECTORY}/shared_sources/nv_helpers_gl/GLSLProgram.cpp
+#  ${BASE_DIRECTORY}/shared_sources/nv_helpers_gl/WindowInertiaCamera.h
+#  ${BASE_DIRECTORY}/shared_sources/nv_helpers/TimeSampler.h
+#  ${BASE_DIRECTORY}/shared_sources/nv_helpers/InertiaCamera.h
+#  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math.inl
+#  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math.h
+#  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math_types.h
+#)
 #####################################################################################
 # Executable
 #
@@ -77,10 +76,12 @@ source_group(common FILES
 target_link_libraries(${PROJNAME} optimized
     ${LIBRARIES_OPTIMIZED}
     ${PLATFORM_LIBRARIES}
+    shared_sources
 )
 target_link_libraries(${PROJNAME} debug
     ${LIBRARIES_DEBUG}
     ${PLATFORM_LIBRARIES}
+    shared_sources
 )
 
 #####################################################################################
