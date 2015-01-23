@@ -1406,9 +1406,8 @@ void MyWindow::renderScene()
                                  vec4f(1,0,0,0.0), vec4f(0,1,0,0.0), vec4f(0,0,1,0.0), vec4f(0.4f,0,1,0.4f) };
     if(g_pathObj && g_usePathObj)
     {
-        mat4f mVP;
-        mVP = m_projection * m_camera.m4_view;
-        beginPath(mVP);
+        // m_projection is already in glMatrixMode(GL_PROJECTION)
+        beginPath(m_camera.m4_view);
         {
             int c = 0;
             for(int y=0; y<g_NObjs; y++)
