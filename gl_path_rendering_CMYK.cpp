@@ -340,15 +340,17 @@ GLenum blendfuncs[] = {
 int g_blendSRC = 5;
 int g_blendDST = 6;
 //------------------------------------
+// used to give a string name to the class through constructor: helps for error checking
+#define P(p) p(#p)
 
-GLSLProgram g_prog_Cst_OneMinusCMYK_A;
-GLSLProgram g_progPR_Cst_OneMinusCMYK_A;
-GLSLProgram g_prog_Cst_RGBA;
-GLSLProgram g_progPR_Cst_RGBA;
+GLSLProgram P(g_prog_Cst_OneMinusCMYK_A);
+GLSLProgram P(g_progPR_Cst_OneMinusCMYK_A);
+GLSLProgram P(g_prog_Cst_RGBA);
+GLSLProgram P(g_progPR_Cst_RGBA);
 
-GLSLProgram g_progTexCMYA_KA_2_RGBA;
+GLSLProgram P(g_progTexCMYA_KA_2_RGBA);
 GLSLProgram g_progTexMS_CMYA_KA_2_RGBA[3];
-GLSLProgram g_progTex_CMYA_KA_2_RGBA;
+GLSLProgram P(g_progTex_CMYA_KA_2_RGBA);
 GLSLProgram g_progImageMS_CMYA_KA_2_RGBA[3];
 
 GLuint      g_vboCircle = 0;
