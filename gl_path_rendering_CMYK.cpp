@@ -27,6 +27,7 @@
 #include "main.h"
 #include "nv_helpers_gl/WindowInertiaCamera.h"
 #include "nv_helpers_gl/GLSLProgram.h"
+#include <list>
 
 #ifdef USESVCUI
 #   include "SvcMFCUI.h"
@@ -428,14 +429,21 @@ MRTMode mrtMode = RENDER1STEP;
 GLuint      g_vao = 0;
 
 //------------------------------------------------------------------------------
-// 
+// It is possible that this callback is invoked from another thread
+// so let's just append messages for later diplay in the main loop
+//------------------------------------------------------------------------------
+struct LogMessage {
+	LogMessage(int l, const char* t) { level = l; txt = t; }
+	int level;
+	std::string txt;
+};
+typedef std::list<LogMessage> Messages;
+static Messages s_messages;
 //------------------------------------------------------------------------------
 void sample_print(int level, const char * txt)
 {
-#ifdef USESVCUI
-    logMFCUI(level, txt);
-#else
-#endif
+	// normally we should enter a critical section...
+	s_messages.push_back(LogMessage(level, txt));
 }
 
 //------------------------------------------------------------------------------
@@ -1614,7 +1622,15 @@ int sample_main(int argc, const char** argv)
 	
 	while (MyWindow::sysPollEvents(false))
     {
-        myWindow.idle();
+		while (!s_messages.empty())
+		{
+			Messages::iterator im = s_messages.begin();
+#ifdef USESVCUI // Windows only...
+			logMFCUI(im->level, im->txt.c_str());
+#endif
+			s_messages.erase(im);
+		}
+		myWindow.idle();
     }
     return true;
 }
