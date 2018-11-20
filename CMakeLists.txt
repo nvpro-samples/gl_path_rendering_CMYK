@@ -5,25 +5,26 @@ Message(STATUS "-------------------------------")
 Message(STATUS "Processing Project ${PROJNAME}:")
 
 #####################################################################################
-# offer the choice of having shared_sources as a sub-folder... good for packaging a sample
+# look for shared_sources 1) as a sub-folder 2) at some other locations
+# this cannot be put anywhere else since we still didn't find CMakeLists_include.txt yet
 #
-# if BASE_DIRECTORY not defined, it means this cmake file was called as the first entry point and not included
 if(NOT BASE_DIRECTORY) # if not defined, it means this cmake file was called as the first entry point and not included
-  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/shared_sources)
+  # check if the external repository is outside or inside the project (as a sub-module)
+  # testing the file CMakeLists_include.txt because when sub-modules are not cloned, the folders are still there...
+  # we also assume here that if shared_sources is there, shared_external is, too...
+  SET(ADD_SUBDIR_BELOW 1)
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/shared_sources/CMakeLists_include.txt)
     Message(STATUS "found sub-folder shared_sources")
     SET(BASE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/shared_sources/CMakeLists_include.txt)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/shared_sources ${CMAKE_BINARY_DIR}/shared_sources)
   elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../shared_sources)
     SET(BASE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..)
     INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/../../shared_sources/CMakeLists_include.txt)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../shared_sources ${CMAKE_BINARY_DIR}/shared_sources)
   else()
     SET(BASE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
     INCLUDE(${CMAKE_CURRENT_SOURCE_DIR}/../shared_sources/CMakeLists_include.txt)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../shared_sources ${CMAKE_BINARY_DIR}/shared_sources)
   endif()
-endif()
+endif(NOT BASE_DIRECTORY)
 _add_project_definitions(${PROJNAME})
 
 #####################################################################################
@@ -32,29 +33,18 @@ _add_project_definitions(${PROJNAME})
 # add refs  in LIBRARIES_DEBUG
 # add files in PACKAGE_SOURCE_FILES
 #
-_add_package_NSight()
-_add_package_MFCUI()
-#_add_package_AntTweakBar()
-_add_package_OpenGLText()
-#_add_package_nvFx()
+_add_package_OpenGL()
+_add_package_ImGUI()
+
+#####################################################################################
+# process the rest of some cmake code that needs to be done *after* the packages add
+_add_shared_sources_lib()
 
 #####################################################################################
 # Source files for this project
 #
 file(GLOB SOURCE_FILES *.cpp *.hpp *.inl *.h *.c)
-#####################################################################################
-# additional files from helpers
-#
-#LIST(APPEND COMMON_SOURCE_FILES 
-#  ${BASE_DIRECTORY}/shared_sources/nv_helpers_gl/GLSLProgram.h
-#  ${BASE_DIRECTORY}/shared_sources/nv_helpers_gl/GLSLProgram.cpp
-#  ${BASE_DIRECTORY}/shared_sources/nv_helpers_gl/WindowInertiaCamera.h
-#  ${BASE_DIRECTORY}/shared_sources/nv_helpers/TimeSampler.h
-#  ${BASE_DIRECTORY}/shared_sources/nv_helpers/InertiaCamera.h
-#  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math.inl
-#  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math.h
-#  ${BASE_DIRECTORY}/shared_sources/nv_math/nv_math_types.h
-#)
+
 #####################################################################################
 # Executable
 #
@@ -73,6 +63,7 @@ endif()
 #
 source_group(common FILES 
   ${COMMON_SOURCE_FILES}
+  ${PACKAGE_SOURCE_FILES}
 )
 #####################################################################################
 # Linkage

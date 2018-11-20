@@ -1,37 +1,37 @@
 /*-----------------------------------------------------------------------
-    Copyright (c) 2013, NVIDIA. All rights reserved.
-
-    Redistribution and use in source and binary forms, with or without
-    modification, are permitted provided that the following conditions
-    are met:
-     * Redistributions of source code must retain the above copyright
-       notice, this list of conditions and the following disclaimer.
-     * Neither the name of its contributors may be used to endorse 
-       or promote products derived from this software without specific
-       prior written permission.
-
-    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-    PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-    CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-    EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-    OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-    feedback to tlorach@nvidia.com (Tristan Lorach)
+ * Copyright (c) 2018, NVIDIA CORPORATION. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *  * Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *  * Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *  * Neither the name of NVIDIA CORPORATION nor the names of its
+ *    contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
+ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */ //--------------------------------------------------------------------
 #include "main.h"
-#include "nv_helpers_gl/WindowInertiaCamera.h"
-#include "nv_helpers_gl/GLSLProgram.h"
+#include <imgui/imgui_impl_gl.h>
+#include "nv_helpers/appwindowcamerainertia.hpp"
+#include "nv_helpers_gl/profilertimers_gl.hpp"
+#include "nv_helpers_gl/extensions_gl.hpp"
+#include "GLSLProgram.h"
 #include <list>
-
-#ifdef USESVCUI
-#   include "SvcMFCUI.h"
-#endif
 
 //
 // Camera animation: captured using '1' in the sample. Then copy and paste...
@@ -58,15 +58,26 @@ static int     s_cameraAnimItems    = 14;
 #define ANIMINTERVALL 1.5f
 static float   s_cameraAnimIntervals= ANIMINTERVALL;
 static bool    s_bCameraAnim        = true;
+static bool    s_helpText           = false;
+
+static nv_helpers_gl::ProfilerTimersGL  s_gltimers;
+static nv_helpers::Profiler             s_profiler;
+static double  s_statsCpuTime = 0;
+static double  s_statsGpuTime = 0;
+
+#define PROFILE_SECTION(name)   nv_helpers::Profiler::Section _tempTimer(s_profiler ,name, NULL)
+#define PROFILE_SPLIT()         s_profiler.accumulationSplit()
 
 //-----------------------------------------------------------------------------
 // Derive the Window for this sample
 //-----------------------------------------------------------------------------
-class MyWindow: public WindowInertiaCamera
+class MyWindow: public AppWindowCameraInertia
 {
-	bool	m_validated;
+  bool	m_validated;
 public:
-	MyWindow() : m_validated(false) {}
+    ImGuiH::Registry    guiRegistry;
+public:
+  MyWindow() : m_validated(false) {}
     virtual bool init();
     virtual void shutdown();
     virtual void reshape(int w, int h);
@@ -79,7 +90,8 @@ public:
     //virtual void idle();
     virtual void display();
 
-	void renderScene();
+    void renderScene();
+    void processUI(int width, int height, double dt);
 };
 
 /////////////////////////////////////////////////////////////////////////
@@ -367,6 +379,8 @@ bool        g_blendEnable = true;
 int         g_MSAARaster = 8;
 int         g_MSAAVal[] = {1, 2, 8, 16};
 int         g_CurMSAAColor = 2;
+bool        g_has_GL_NV_framebuffer_mixed_samples = false;
+bool        g_buseUI = true;
 
 
 unsigned int g_pathObj = 0;
@@ -433,17 +447,116 @@ GLuint      g_vao = 0;
 // so let's just append messages for later diplay in the main loop
 //------------------------------------------------------------------------------
 struct LogMessage {
-	LogMessage(int l, const char* t) { level = l; txt = t; }
-	int level;
-	std::string txt;
+  LogMessage(int l, const char* t) { level = l; txt = t; }
+  int level;
+  std::string txt;
 };
 typedef std::list<LogMessage> Messages;
 static Messages s_messages;
 //------------------------------------------------------------------------------
 void sample_print(int level, const char * txt)
 {
-	// normally we should enter a critical section...
-	s_messages.push_back(LogMessage(level, txt));
+  // normally we should enter a critical section...
+  s_messages.push_back(LogMessage(level, txt));
+}
+
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+// UI stuff
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+
+#define COMBO_BLITMODE 0
+#define COMBO_MRTMODE 1
+#define COMBO_MSAACOL 2
+#define COMBO_MSAARAST 3
+#define COMBO_BLENDEQ 4
+#define COMBO_BLENDFNSRC 5
+#define COMBO_BLENDFNDST 6
+void MyWindow::processUI(int width, int height, double dt)
+{
+    // Update imgui configuration
+    auto &imgui_io = ImGui::GetIO();
+    imgui_io.DeltaTime = static_cast<float>(dt);
+    imgui_io.DisplaySize = ImVec2(width, height);
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowBgAlpha(0.5);
+    ImGui::SetNextWindowSize(ImVec2(450, 0), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("NVIDIA " PROJECT_NAME, nullptr))
+    {
+        //ImGui::PushItemWidth(200);
+        ImGui::Text("gl and vk version");
+        ImGuiH::InputIntClamped("N Objs x&y", &g_NObjs, 1, 100);
+        ImGui::Separator();
+        //
+        // Blit modes
+        //
+        guiRegistry.enumCombobox(COMBO_BLITMODE, "Blit Mode", &blitMode);
+        //
+        // render mode on Muyltiple render-targets
+        //
+        guiRegistry.enumCombobox(COMBO_MRTMODE, "Render Pass", &mrtMode);
+        //
+        // Color samples combo
+        //
+        guiRegistry.enumCombobox(COMBO_MSAACOL, "MSAA Color samples", &g_CurMSAAColor);
+        //
+        // Mixed samples combo
+        //
+        if (g_has_GL_NV_framebuffer_mixed_samples)
+        {
+            guiRegistry.enumCombobox(COMBO_MSAARAST, "MSAA Raster samples", &g_MSAARaster);
+        }
+        //
+        // Blending Equations
+        //
+        guiRegistry.enumCombobox(COMBO_BLENDEQ, "Blend Equation", &g_curBlendEquation);
+        //
+        // Blending Funcs
+        //
+        guiRegistry.enumCombobox(COMBO_BLENDFNSRC, "Blend Func SRC", &g_blendSRC);
+        guiRegistry.enumCombobox(COMBO_BLENDFNDST, "Blend Func DST", &g_blendDST);
+        //
+        // Global transparency
+        //
+        ImGui::Separator();
+        ImGuiH::InputFloatClamped("Global Alpha", &g_alpha, 0.0, 1.0);
+        //ImGui::Checkbox("continuous render", &m_realtime.bNonStopRendering);
+        ImGui::Checkbox("animation", &s_bCameraAnim);
+        ImGui::Separator();
+        ImGui::Text("('h' to toggle help)");
+        //if(s_bStats)
+        //    h += m_oglTextBig.drawString(5, m_winSz[1]-h, hudStats.c_str(), 0, vec4f(0.8,0.8,1.0,0.5).vec_array);
+
+        if (s_helpText)
+        {
+            ImGui::BeginChild("Help", ImVec2(400, 110), true);
+            // camera help
+            //ImGui::SetNextWindowCollapsed(0);
+            const char *txt = getHelpText();
+            ImGui::Text("'`' or 'u' to toggle UI\n");
+            ImGui::Text(txt);
+            ImGui::EndChild();
+        }
+
+        int avg = 100;
+
+        if (s_profiler.getAveragedFrames() % avg == avg - 1) {
+            s_profiler.getAveragedValues("frame", s_statsCpuTime, s_statsGpuTime);
+        }
+
+        float gpuTimeF = float(s_statsGpuTime);
+        float cpuTimeF = float(s_statsCpuTime);
+        float maxTimeF = std::max(std::max(cpuTimeF, gpuTimeF), 0.0001f);
+
+        ImGui::Text("Frame     [ms]: %2.1f", dt*1000.0f);
+        ImGui::Text("Scene GPU [ms]: %2.3f", gpuTimeF / 1000.0f);
+        ImGui::Text("Scene CPU [ms]: %2.3f", cpuTimeF / 1000.0f);
+        ImGui::ProgressBar(gpuTimeF / maxTimeF, ImVec2(0.0f, 0.0f));
+        ImGui::ProgressBar(cpuTimeF / maxTimeF, ImVec2(0.0f, 0.0f));
+    }
+    ImGui::End();
 }
 
 //------------------------------------------------------------------------------
@@ -454,48 +567,48 @@ void sample_print(int level, const char * txt)
 
 bool CheckFramebufferStatus()
 {
-	GLenum status;
-	status = (GLenum) glCheckFramebufferStatus(GL_FRAMEBUFFER);
-	switch(status) {
-		case GL_FRAMEBUFFER_COMPLETE:
-			return true;
-		case GL_FRAMEBUFFER_UNSUPPORTED:
-			LOGE("Unsupported framebuffer format\n");
-			assert(!"Unsupported framebuffer format");
-			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
-			LOGE("Framebuffer incomplete, missing attachment\n");
-			assert(!"Framebuffer incomplete, missing attachment");
-			break;
-		//case GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS:
-		//	PRINTF(("Framebuffer incomplete, attached images must have same dimensions\n"));
-		//	assert(!"Framebuffer incomplete, attached images must have same dimensions");
-		//	break;
-		//case GL_FRAMEBUFFER_INCOMPLETE_FORMATS:
-		//	PRINTF(("Framebuffer incomplete, attached images must have same format\n"));
-		//	assert(!"Framebuffer incomplete, attached images must have same format");
-		//	break;
-		case GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER:
-			LOGE("Framebuffer incomplete, missing draw buffer\n");
-			assert(!"Framebuffer incomplete, missing draw buffer");
-			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER:
-			LOGE("Framebuffer incomplete, missing read buffer\n");
-			assert(!"Framebuffer incomplete, missing read buffer");
-			break;
+  GLenum status;
+  status = (GLenum) glCheckFramebufferStatus(GL_FRAMEBUFFER);
+  switch(status) {
+    case GL_FRAMEBUFFER_COMPLETE:
+      return true;
+    case GL_FRAMEBUFFER_UNSUPPORTED:
+      LOGE("Unsupported framebuffer format\n");
+      assert(!"Unsupported framebuffer format");
+      break;
+    case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
+      LOGE("Framebuffer incomplete, missing attachment\n");
+      assert(!"Framebuffer incomplete, missing attachment");
+      break;
+    //case GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS:
+    //	PRINTF(("Framebuffer incomplete, attached images must have same dimensions\n"));
+    //	assert(!"Framebuffer incomplete, attached images must have same dimensions");
+    //	break;
+    //case GL_FRAMEBUFFER_INCOMPLETE_FORMATS:
+    //	PRINTF(("Framebuffer incomplete, attached images must have same format\n"));
+    //	assert(!"Framebuffer incomplete, attached images must have same format");
+    //	break;
+    case GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER:
+      LOGE("Framebuffer incomplete, missing draw buffer\n");
+      assert(!"Framebuffer incomplete, missing draw buffer");
+      break;
+    case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER:
+      LOGE("Framebuffer incomplete, missing read buffer\n");
+      assert(!"Framebuffer incomplete, missing read buffer");
+      break;
         case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
-			LOGE("Framebuffer incomplete attachment\n");
-			assert(!"Framebuffer incomplete attachment");
-			break;
+      LOGE("Framebuffer incomplete attachment\n");
+      assert(!"Framebuffer incomplete attachment");
+      break;
         case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE:
-			LOGE("Framebuffer incomplete multisample\n");
-			assert(!"Framebuffer incomplete multisample");
-			break;
-		default:
-			LOGE("Error %x\n", status);
-			assert(!"unknown FBO Error");
-			break;
-	}
+      LOGE("Framebuffer incomplete multisample\n");
+      assert(!"Framebuffer incomplete multisample");
+      break;
+    default:
+      LOGE("Error %x\n", status);
+      assert(!"unknown FBO Error");
+      break;
+  }
     return false;
 }
 
@@ -505,17 +618,17 @@ bool CheckFramebufferStatus()
 GLuint createTexture(int w, int h, int samples, int coverageSamples, GLenum intfmt, GLenum fmt)
 {
     GLuint		textureID;
-	glGenTextures(1, &textureID);
+  glGenTextures(1, &textureID);
     if(samples <= 1)
     {
-	    glBindTexture( GL_TEXTURE_2D, textureID);
-	    glTexImage2D( GL_TEXTURE_2D, 0, intfmt, w, h, 0, GL_RGBA, GL_FLOAT, NULL);
-	    glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	    glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	    glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	    glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      glBindTexture( GL_TEXTURE_2D, textureID);
+      glTexImage2D( GL_TEXTURE_2D, 0, intfmt, w, h, 0, GL_RGBA, GL_FLOAT, NULL);
+      glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     } else {
-	    glBindTexture( GL_TEXTURE_2D_MULTISAMPLE, textureID);
+      glBindTexture( GL_TEXTURE_2D_MULTISAMPLE, textureID);
         // Note: fixed-samples set to GL_TRUE, otherwise it could fail when attaching to FBO having render-buffer !!
         if(coverageSamples > 1)
         {
@@ -556,47 +669,47 @@ GLuint createRenderBuffer(int w, int h, int samples, int coverageSamples, GLenum
 {
     int query;
     GLuint rb;
-	glGenRenderbuffers(1, &rb);
-	glBindRenderbuffer(GL_RENDERBUFFER, rb);
-	if (coverageSamples) 
-	{
-		glRenderbufferStorageMultisampleCoverageNV( GL_RENDERBUFFER, coverageSamples, samples, fmt,
-													w, h);
-		glGetRenderbufferParameteriv( GL_RENDERBUFFER, GL_RENDERBUFFER_COVERAGE_SAMPLES_NV, &query);
-		if ( query < coverageSamples)
-			rb = 0;
-		else if ( query > coverageSamples) 
-		{
-			// report back the actual number
-			coverageSamples = query;
+  glGenRenderbuffers(1, &rb);
+  glBindRenderbuffer(GL_RENDERBUFFER, rb);
+  if (coverageSamples) 
+  {
+    glRenderbufferStorageMultisampleCoverageNV( GL_RENDERBUFFER, coverageSamples, samples, fmt,
+                          w, h);
+    glGetRenderbufferParameteriv( GL_RENDERBUFFER, GL_RENDERBUFFER_COVERAGE_SAMPLES_NV, &query);
+    if ( query < coverageSamples)
+      rb = 0;
+    else if ( query > coverageSamples) 
+    {
+      // report back the actual number
+      coverageSamples = query;
             LOGW("Warning: coverage samples is now %d\n", coverageSamples);
-		}
-		glGetRenderbufferParameteriv( GL_RENDERBUFFER, GL_RENDERBUFFER_COLOR_SAMPLES_NV, &query);
-		if ( query < samples)
-			rb = 0;
-		else if ( query > samples) 
-		{
-			// report back the actual number
-			samples = query;
+    }
+    glGetRenderbufferParameteriv( GL_RENDERBUFFER, GL_RENDERBUFFER_COLOR_SAMPLES_NV, &query);
+    if ( query < samples)
+      rb = 0;
+    else if ( query > samples) 
+    {
+      // report back the actual number
+      samples = query;
             LOGW("Warning: depth-samples is now %d\n", samples);
-		}
-	}
-	else 
-	{
-		// create a regular MSAA color buffer
-		glRenderbufferStorageMultisample( GL_RENDERBUFFER, samples, fmt, w, h);
-		// check the number of samples
-		glGetRenderbufferParameteriv( GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &query);
+    }
+  }
+  else 
+  {
+    // create a regular MSAA color buffer
+    glRenderbufferStorageMultisample( GL_RENDERBUFFER, samples, fmt, w, h);
+    // check the number of samples
+    glGetRenderbufferParameteriv( GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &query);
 
-		if ( query < samples) 
-			rb = 0;
-		else if ( query > samples) 
-		{
-			samples = query;
+    if ( query < samples) 
+      rb = 0;
+    else if ( query > samples) 
+    {
+      samples = query;
             LOGW("Warning: depth-samples is now %d\n", samples);
-		}
-	}
-	glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    }
+  }
+  glBindRenderbuffer(GL_RENDERBUFFER, 0);
     return rb;
 }
 
@@ -629,7 +742,7 @@ GLuint createRenderBufferS8(int w, int h, int samples, int coverageSamples)
 GLuint createFBO()
 {
     GLuint fb;
-	glGenFramebuffers(1, &fb);
+  glGenFramebuffers(1, &fb);
     return fb;
 }
 
@@ -638,9 +751,9 @@ GLuint createFBO()
 //------------------------------------------------------------------------------
 bool attachTexture2D(GLuint framebuffer, GLuint textureID, int colorAttachment)
 {
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer); 
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0+colorAttachment, GL_TEXTURE_2D, textureID, 0);
-	return CheckFramebufferStatus();
+  glBindFramebuffer(GL_FRAMEBUFFER, framebuffer); 
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0+colorAttachment, GL_TEXTURE_2D, textureID, 0);
+  return CheckFramebufferStatus();
 }
 
 //------------------------------------------------------------------------------
@@ -650,9 +763,9 @@ bool attachTexture2DMS(GLuint framebuffer, GLuint textureID, int colorAttachment
 {
     if(g_MSAAVal[g_CurMSAAColor] <= 1)
         return attachTexture2D(framebuffer, textureID, colorAttachment);
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer); 
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0+colorAttachment, GL_TEXTURE_2D_MULTISAMPLE, textureID, 0);
-	return CheckFramebufferStatus();
+  glBindFramebuffer(GL_FRAMEBUFFER, framebuffer); 
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0+colorAttachment, GL_TEXTURE_2D_MULTISAMPLE, textureID, 0);
+  return CheckFramebufferStatus();
 }
 
 //------------------------------------------------------------------------------
@@ -661,9 +774,9 @@ bool attachTexture2DMS(GLuint framebuffer, GLuint textureID, int colorAttachment
 #ifdef USE_RENDERBUFFERS
 bool attachRenderbuffer(GLuint framebuffer, GLuint rb, int colorAttachment)
 {
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer); 
-	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0+colorAttachment, GL_RENDERBUFFER, rb);
-	return CheckFramebufferStatus();
+  glBindFramebuffer(GL_FRAMEBUFFER, framebuffer); 
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0+colorAttachment, GL_RENDERBUFFER, rb);
+  return CheckFramebufferStatus();
 }
 //------------------------------------------------------------------------------
 // 
@@ -671,7 +784,7 @@ bool attachRenderbuffer(GLuint framebuffer, GLuint rb, int colorAttachment)
 bool attachDSTRenderbuffer(GLuint framebuffer, GLuint dstrb)
 {
     bool bRes;
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer); 
+  glBindFramebuffer(GL_FRAMEBUFFER, framebuffer); 
     //glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, dstrb);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, dstrb);
     return CheckFramebufferStatus() ;
@@ -811,12 +924,12 @@ void deleteRenderTargets()
 void buildRenderTargets(int w, int h)
 {
     deleteRenderTargets();
-    if(glewGetExtension("GL_NV_framebuffer_mixed_samples") )
+    // TODO check "GL_NV_framebuffer_mixed_samples"
     {
         if(g_MSAARaster < g_MSAAVal[g_CurMSAAColor])
             g_MSAARaster = g_MSAAVal[g_CurMSAAColor];
-    } else
-        g_MSAARaster = g_MSAAVal[g_CurMSAAColor];
+    }
+    //else g_MSAARaster = g_MSAAVal[g_CurMSAAColor];
 
     LOGI("Building Render targets with MSAA Color = %d and MSAA Raster = %d\n", g_MSAAVal[g_CurMSAAColor], g_MSAARaster);
     fboSz[0] = w;
@@ -901,190 +1014,58 @@ void buildRenderTargets(int w, int h)
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 //------------------------------------------------------------------------------
-// 
-//------------------------------------------------------------------------------
-#ifdef USESVCUI
-class MyEventsWnd : public IEventsWnd
-{
-    virtual void ComboSelectionChanged(IControlCombo *pWin, unsigned int selectedidx)
-    {
-        if(!strcmp(pWin->GetID(), "BLTMode") ) {
-			LOGI("BLTMode: %s", pWin->GetItem(selectedidx)->strText);
-            blitMode = (BlitMode)pWin->GetItemData(selectedidx);
-		} else if(!strcmp(pWin->GetID(), "MRT") ) {
-			LOGI("MRT: %s", pWin->GetItem(selectedidx)->strText);
-            mrtMode = (MRTMode)pWin->GetItemData(selectedidx);
-		} else if(!strcmp(pWin->GetID(), "BLEND") ) {
-			LOGI("BLEND Eq.: %s", pWin->GetItem(selectedidx)->strText);
-            g_curBlendEquation = (int)pWin->GetItemData(selectedidx);
-            if(selectedidx > 0) {
-                if(mrtMode != RENDER1STEPRGBA)
-                    mrtMode = RENDER2STEPS; // need to render only in one render-target at a time
-                g_pWinHandler->VariableFlush(&mrtMode);
-            }
-        }
-        else if(!strcmp(pWin->GetID(), "BLENDDST") )
-		{
-			LOGI("BLEND_DST: %s", pWin->GetItem(selectedidx)->strText);
-            g_blendDST = (int)pWin->GetItemData(selectedidx);
-		} else if(!strcmp(pWin->GetID(), "BLENDSRC") )
-		{
-			LOGI("BLEND_SRC: %s", pWin->GetItem(selectedidx)->strText);
-            g_blendSRC = (int)pWin->GetItemData(selectedidx);
-		}
-    }
-};
-MyEventsWnd myEvents;
-#endif
-//------------------------------------------------------------------------------
 //
 //------------------------------------------------------------------------------
 bool MyWindow::init()
 {
-	if(!WindowInertiaCamera::init())
-		return false;
+  if(!AppWindowCameraInertia::init())
+    return false;
+    ImGui::InitGL();
+    s_gltimers.init(10);
+    s_profiler.init();
+    s_profiler.setDefaultGPUInterface(&s_gltimers);
+
+
     m_camera.curEyePos = m_camera.eyePos = vec3f(0,0,3.0f);
-	m_textColor = 0x808080A0;
-#ifdef USESVCUI
-    initMFCUIBase(0, m_winSz[1]+40, m_winSz[0], 150);
-    g_pWinHandler->Register(&myEvents);
-#endif
     LOGI("'1': Blit used for MSAA resolve");
     LOGI("'2': TexelFetch used on MSAA Texture to resolve");
     LOGI("'3': ImageLoad used on MSAA Texture to resolve");
     //
-    // easy Toggles
+    // UI
     //
-    addToggleKeyToMFCUI(' ', &m_realtime.bNonStopRendering, "space: toggles continuous rendering\n");
-    addToggleKeyToMFCUI('b', &g_blendEnable, "'b': Blending Enable\n");
-    addToggleKeyToMFCUI('c', &g_activeC, "'c': C component\n");
-    addToggleKeyToMFCUI('m', &g_activeM, "'m': M component\n");
-    addToggleKeyToMFCUI('y', &g_activeY, "'y': Y component\n");
-    addToggleKeyToMFCUI('k', &g_activeK, "'k': K component\n");
-    addToggleKeyToMFCUI('p', &g_usePathObj, "use Path rendering\n");
-    addToggleKeyToMFCUI('a', &s_bCameraAnim, "'a': animate camera\n");
-#ifdef USESVCUI
-    g_pWinHandler->VariableBind(
-        g_pWinHandler->CreateCtrlScalar("OBJS", "N Objs x&y", g_pToggleContainer)->SetBounds(0.0f, 100.0f)->SetIntMode(), 
-        &g_NObjs);
-    //
-    // Blit modes
-    //
-    IControlCombo* pCombo = g_pWinHandler->CreateCtrlCombo("BLTMode", "Blit Mode", g_pToggleContainer);
-    pCombo->AddItem("Resolve with Blit", (size_t)RESOLVEWITHBLIT);
-    pCombo->AddItem("Resolve with Shader&Texture Fetch", (size_t)RESOLVEWITHSHADERTEX);
-    pCombo->AddItem("Resolve with Shader&Image Load", (size_t)RESOLVEWITHSHADERIMAGE);
-    pCombo->AddItem("Resolve with blit : RGBA to backbuffer", (size_t)RESOLVERGBATOBACKBUFFER);
-    // NOTE: I might have a bug here: VariableBind on the combo is failing. So I added MyEventsWnd
-    g_pWinHandler->VariableBind(pCombo, (int*)&blitMode);
-    //
-    // render mode on Muyltiple render-targets
-    //
-    pCombo = g_pWinHandler->CreateCtrlCombo("MRT", "Render pass", g_pToggleContainer);
-    pCombo->AddItem("Render CMYA & KA to 2 RTs at a time", (size_t)RENDER1STEP);
-    pCombo->AddItem("Render CMYA to RT#0 then KA to RT#1", (size_t)RENDER2STEPS);
-    pCombo->AddItem("Render RGBA to RT#0 only", (size_t)RENDER1STEPRGBA);
-    // NOTE: I might have a bug here: VariableBind on the combo is failing. So I added MyEventsWnd
-    g_pWinHandler->VariableBind(pCombo, (int*)&mrtMode);
-    //
-    // Color samples combo
-    //
-    pCombo = g_pWinHandler->CreateCtrlCombo("MSAAColor", "MSAA Color samples", g_pToggleContainer);
-    pCombo->AddItem("MSAA OFF", (size_t)1);
-    pCombo->AddItem("MSAA 2x", (size_t)2);
-    pCombo->AddItem("MSAA 8x", (size_t)8);
-	class MSAAColorUI: public IEventsWnd
-	{
-	public:
-        void ComboSelectionChanged(IControlCombo *pWin, unsigned int selectedidx)
-		{ 
-            MyWindow* p = reinterpret_cast<MyWindow*>(pWin->GetUserData());
-            g_CurMSAAColor = selectedidx;
-            if(!glewGetExtension("GL_NV_framebuffer_mixed_samples"))
-            {
-                g_MSAARaster = g_MSAAVal[g_CurMSAAColor];
-            }
-            buildRenderTargets(p->m_winSz[0], p->m_winSz[1]);
-        }
-	};
-	static MSAAColorUI msaaColorUI;
-	pCombo->SetUserData(this)->Register(&msaaColorUI);
-    pCombo->SetSelectedByData(g_MSAAVal[g_CurMSAAColor]);
-    //
-    // Mixed samples combo
-    //
-    if(glewGetExtension("GL_NV_framebuffer_mixed_samples") )
+    auto &imgui_io = ImGui::GetIO();
+    imgui_io.IniFilename = nullptr;
+    guiRegistry.enumAdd(COMBO_BLITMODE, RESOLVEWITHBLIT, "Resolve with Blit");
+    guiRegistry.enumAdd(COMBO_BLITMODE, RESOLVEWITHSHADERTEX, "Resolve with Shader&Texture Fetch");
+    guiRegistry.enumAdd(COMBO_BLITMODE, RESOLVEWITHSHADERIMAGE, "Resolve with Shader&Image Load");
+    guiRegistry.enumAdd(COMBO_BLITMODE, RESOLVERGBATOBACKBUFFER, "Resolve with blit : RGBA to backbuffer");
+    guiRegistry.enumAdd(COMBO_MRTMODE, RENDER1STEP, "Render CMYA & KA to 2 RTs at a time");
+    guiRegistry.enumAdd(COMBO_MRTMODE, RENDER2STEPS, "Render CMYA to RT#0 then KA to RT#1");
+    guiRegistry.enumAdd(COMBO_MRTMODE, RENDER1STEPRGBA, "Render RGBA to RT#0 only");
+    guiRegistry.enumAdd(COMBO_MSAACOL, 0, "MSAA OFF");
+    guiRegistry.enumAdd(COMBO_MSAACOL, 1, "MSAA 2x");
+    guiRegistry.enumAdd(COMBO_MSAACOL, 2, "MSAA 8x");
+    
+    // TODO check "GL_NV_framebuffer_mixed_samples")
     {
-        pCombo = g_pWinHandler->CreateCtrlCombo("MSAARaster", "MSAA Raster samples", g_pToggleContainer);
-        pCombo->AddItem("MSAA 2x", (size_t)2);
-        pCombo->AddItem("MSAA 4x", (size_t)4);
-        pCombo->AddItem("MSAA 8x", (size_t)8);
-        pCombo->AddItem("MSAA 16x", (size_t)16);
-	    class MSAAUI: public IEventsWnd
-	    {
-	    public:
-            void ComboSelectionChanged(IControlCombo *pWin, unsigned int selectedidx)
-		    { 
-                MyWindow* p = reinterpret_cast<MyWindow*>(pWin->GetUserData());
-                g_MSAARaster = (int)pWin->GetItemData(selectedidx);
-                buildRenderTargets(p->m_winSz[0], p->m_winSz[1]);
-            }
-	    };
-	    static MSAAUI msaaUI;
-	    pCombo->SetUserData(this)->Register(&msaaUI);
-        pCombo->SetSelectedByIndex(3);
+        g_has_GL_NV_framebuffer_mixed_samples = true;
+        guiRegistry.enumAdd(COMBO_MSAARAST, 2, "MSAA 2x");
+        guiRegistry.enumAdd(COMBO_MSAARAST, 4, "MSAA 4x");
+        guiRegistry.enumAdd(COMBO_MSAARAST, 8, "MSAA 8x");
+        guiRegistry.enumAdd(COMBO_MSAARAST, 16, "MSAA 16x");
     }
-    //
-    // Blending Equations
-    //
-    pCombo = g_pWinHandler->CreateCtrlCombo("BLEND", "Blend Equation", g_pToggleContainer);
-    for(int be = 0; blendequations[be] != GL_ZERO; be++)
+    for (int be = 0; blendequations[be] != GL_ZERO; be++)
     {
-        pCombo->AddItem(blendequationNames[be], (size_t)be);
+        guiRegistry.enumAdd(COMBO_BLENDEQ, be, blendequationNames[be]);
     }
-    // NOTE: I might have a bug here: VariableBind on the combo is failing. So I added MyEventsWnd
-    g_pWinHandler->VariableBind(pCombo, (int*)&g_curBlendEquation);
-    //
-    // Blending Funcs
-    //
-    pCombo = g_pWinHandler->CreateCtrlCombo("BLENDSRC", "Blend Func SRC", g_pToggleContainer);
-    for(int be = 0; blendfuncs[be] != GL_ZERO; be++)
+    for (int be = 0; blendfuncs[be] != GL_ZERO; be++)
     {
-        pCombo->AddItem(blendfuncNames[be], (size_t)be);
+        guiRegistry.enumAdd(COMBO_BLENDFNSRC, be, blendfuncNames[be]);
     }
-    // NOTE: I might have a bug here: VariableBind on the combo is failing. So I added MyEventsWnd
-    g_pWinHandler->VariableBind(pCombo, (int*)&g_blendSRC);
-
-    pCombo = g_pWinHandler->CreateCtrlCombo("BLENDDST", "Blend Func DST", g_pToggleContainer);
-    for(int be = 0; blendfuncs[be] != GL_ZERO; be++)
+    for (int be = 0; blendfuncs[be] != GL_ZERO; be++)
     {
-        pCombo->AddItem(blendfuncNames[be], (size_t)be);
+        guiRegistry.enumAdd(COMBO_BLENDFNDST, be, blendfuncNames[be]);
     }
-    // NOTE: I might have a bug here: VariableBind on the combo is failing. So I added MyEventsWnd
-    g_pWinHandler->VariableBind(pCombo, (int*)&g_blendDST);
-    //
-    // Global transparency
-    //
-    g_pWinHandler->VariableBind(
-        g_pWinHandler->CreateCtrlScalar("Alpha", "Global Alpha", g_pToggleContainer)->SetBounds(0.0f, 1.0f), 
-        &g_alpha);
-
-	class TimingScaleUI: public IEventsWnd
-	{
-	public:
-		void Button(IWindow *pWin, int pressed)
-		{ reinterpret_cast<MyWindow*>(pWin->GetUserData())->m_bAdjustTimeScale = true; };
-	};
-	static TimingScaleUI timingScaleUI;
-	g_pWinHandler->CreateCtrlButton("TIMESCALE", "re-scale timing", g_pToggleContainer)
-		->SetUserData(this)
-		->Register(&timingScaleUI);
-
-    addToggleKeyToMFCUI(' ', &m_realtime.bNonStopRendering, "space: toggles continuous rendering\n");
-
-	g_pToggleContainer->UnFold();
-
-#endif
 
     m_realtime.bNonStopRendering = true;
     //
@@ -1138,7 +1119,7 @@ bool MyWindow::init()
     //
     // NV-Path rendering
     //
-    if(glewGetExtension("GL_NV_path_rendering") )
+    // TODO check GL_NV_path_rendering
     {
         g_usePathObj = true;
         g_pathObj = glGenPathsNV(1);
@@ -1157,17 +1138,18 @@ bool MyWindow::init()
         glPathCommandsNV(g_pathObj, 10, pathCommands, 24, GL_FLOAT, pathCoords);
 
         glPathParameterfNV(g_pathObj, GL_PATH_STROKE_WIDTH_NV, 0.01f);
-	    glPathParameteriNV(g_pathObj, GL_PATH_JOIN_STYLE_NV, GL_ROUND_NV);
-    } else {
-        g_usePathObj = false;
-    }
+      glPathParameteriNV(g_pathObj, GL_PATH_JOIN_STYLE_NV, GL_ROUND_NV);
+    } 
+    //else {
+    //    g_usePathObj = false;
+    //}
     //
     // NV_framebuffer_mixed_samples
     //
-    if(glewGetExtension("GL_NV_framebuffer_mixed_samples") )
+    // TODO check GL_NV_framebuffer_mixed_samples
     {
         g_MSAARaster = 8;
-        //glEnable(GL_RASTER_MULTISAMPLE_EXT);
+        //glEnable(GL_RASTER_MULTISAMPLE);
         //glRasterSamplesEXT(g_MSAARaster, GL_TRUE);
         glCoverageModulationNV(GL_RGBA);
         LOGI("GL_NV_framebuffer_mixed_samples detected: color MSAA= %d; MSAA for DST=%d\n", g_MSAAVal[g_CurMSAAColor], g_MSAARaster);
@@ -1177,55 +1159,51 @@ bool MyWindow::init()
     //
     buildRenderTargets(m_winSz[0], m_winSz[1]);
 
-	m_validated = true;
+  m_validated = true;
     return true;
 }
 //------------------------------------------------------------------------------
 void MyWindow::shutdown()
 {
-#ifdef USESVCUI
-    shutdownMFCUI();
-#endif
+    s_gltimers.deinit();
 }
 
 //------------------------------------------------------------------------------
 void MyWindow::reshape(int w, int h)
 {
-	WindowInertiaCamera::reshape(w, h);
+    AppWindowCameraInertia::reshape(w, h);
     glMatrixMode(GL_PROJECTION);
     glLoadMatrixf(m_projection.mat_array);
     glMatrixMode(GL_MODELVIEW);
     //
     // rebuild the FBOs to match the new size
     //
-	if(m_validated)
-		buildRenderTargets(w, h);
+  if(m_validated)
+    buildRenderTargets(w, h);
 }
 
 //------------------------------------------------------------------------------
 #define KEYTAU 0.10f
 void MyWindow::keyboard(NVPWindow::KeyCode key, MyWindow::ButtonAction action, int mods, int x, int y)
 {
-	WindowInertiaCamera::keyboard(key, action, mods, x, y);
-	if(action == MyWindow::BUTTON_RELEASE)
+    AppWindowCameraInertia::keyboard(key, action, mods, x, y);
+  if(action == MyWindow::BUTTON_RELEASE)
         return;
 
     switch(key)
     {
     case NVPWindow::KEY_F1:
+        s_profiler.reset(1);
         break;
-	//...
+  //...
     case NVPWindow::KEY_F12:
         break;
     }
-#ifdef USESVCUI
-    flushMFCUIToggle(key);
-#endif
 }
 //------------------------------------------------------------------------------
 void MyWindow::keyboardchar(unsigned char key, int mods, int x, int y)
 {
-    WindowInertiaCamera::keyboardchar(key, mods, x, y);
+    AppWindowCameraInertia::keyboardchar(key, mods, x, y);
     switch( key )
     {
         case '1':
@@ -1247,13 +1225,19 @@ void MyWindow::keyboardchar(unsigned char key, int mods, int x, int y)
         case '0':
             m_camera.print_look_at();
             break;
+        case 'h':
+            s_helpText ^= 1;
+            break;
+        case ' ':
+            s_bCameraAnim ^= 1;
+            break;
+        case '`':
+        case 'u':
+          g_buseUI ^= 1;
+          break;
         default:
             break;
     }
-#ifdef USESVCUI
-    g_pWinHandler->VariableFlush(&blitMode);
-    flushMFCUIToggle(key);
-#endif
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1291,7 +1275,7 @@ void drawFilledCircle(mat4f mWVP, vec3f &p, float scale, vec4f &CMYK, float alph
         g_prog_Cst_OneMinusCMYK_A.setUniform4f("CMYK", 0.0f, 0.0f, 0.0f, 1.0f);
         glDrawArrays(GL_LINE_STRIP, 1, SUBDIVS+1);
     } else {
-        glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
+        glDrawBuffer(GL_COLOR_ATTACHMENT0);
         g_prog_Cst_OneMinusCMYK_A.setUniform4f("CMYK", CMYK[0], CMYK[1], CMYK[2]);
         glDrawArrays(GL_TRIANGLE_FAN, 0, SUBDIVS+2);
         if(g_curBlendEquation > 0)
@@ -1300,7 +1284,7 @@ void drawFilledCircle(mat4f mWVP, vec3f &p, float scale, vec4f &CMYK, float alph
         glDrawArrays(GL_LINE_STRIP, 1, SUBDIVS+1);
         if(g_curBlendEquation > 0)
             glBlendBarrierNV();
-        glDrawBuffer(GL_COLOR_ATTACHMENT1_EXT);
+        glDrawBuffer(GL_COLOR_ATTACHMENT1);
         g_prog_Cst_OneMinusCMYK_A.setUniform4f("CMYK", CMYK[3]);
         glDrawArrays(GL_TRIANGLE_FAN, 0, SUBDIVS+2);
         if(g_curBlendEquation > 0)
@@ -1339,59 +1323,59 @@ void drawPath(vec3f &p, float scale, vec4f &CMYK, float alpha)
     glPushMatrix();
     glTranslatef(p.x, p.y, p.z);
     glScalef(scale, scale, scale);
-	glPathStencilFuncNV(GL_ALWAYS, 0, 0xFF);
+  glPathStencilFuncNV(GL_ALWAYS, 0, 0xFF);
 
     glStencilFillPathNV(g_pathObj, GL_INVERT/*GL_COUNT_UP_NV*/, 0xFF);
-	glStencilFunc(GL_NOTEQUAL, /*stencil_ref*/0, /*read_mask*/0xFF);
+  glStencilFunc(GL_NOTEQUAL, /*stencil_ref*/0, /*read_mask*/0xFF);
     if(mrtMode == RENDER1STEPRGBA) // in RGBA, only provide the simple rendering to one render-target, using RGBA
     {
         vec3f RGB = convertCMYK2RGB(CMYK);
         g_progPR_Cst_RGBA.setUniform4f("RGBA", RGB[0], RGB[1], RGB[2], alpha);
-	    glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
-	    glCoverFillPathNV(g_pathObj, GL_CONVEX_HULL_NV);
+      glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
+      glCoverFillPathNV(g_pathObj, GL_CONVEX_HULL_NV);
     }
     else if(mrtMode == RENDER1STEP)
     {
         g_progPR_Cst_OneMinusCMYK_A.setUniform1f("alpha", alpha);
         g_progPR_Cst_OneMinusCMYK_A.setUniform4f("CMYK", CMYK[0], CMYK[1], CMYK[2], CMYK[3]);
-	    glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
-	    glCoverFillPathNV(g_pathObj, GL_CONVEX_HULL_NV);
+      glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
+      glCoverFillPathNV(g_pathObj, GL_CONVEX_HULL_NV);
     } 
     else //if(mrtMode == RENDER2STEPS)
     {
         g_progPR_Cst_OneMinusCMYK_A.setUniform1f("alpha", alpha);
         g_progPR_Cst_OneMinusCMYK_A.setUniform4f("CMYK", CMYK[0], CMYK[1], CMYK[2]);
-	    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
-        glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
-	    glCoverFillPathNV(g_pathObj, GL_CONVEX_HULL_NV);
+      glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
+        glDrawBuffer(GL_COLOR_ATTACHMENT0);
+      glCoverFillPathNV(g_pathObj, GL_CONVEX_HULL_NV);
         g_progPR_Cst_OneMinusCMYK_A.setUniform4f("CMYK", CMYK[3]);
-	    glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
-        glDrawBuffer(GL_COLOR_ATTACHMENT1_EXT);
-	    glCoverFillPathNV(g_pathObj, GL_CONVEX_HULL_NV);
+      glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
+        glDrawBuffer(GL_COLOR_ATTACHMENT1);
+      glCoverFillPathNV(g_pathObj, GL_CONVEX_HULL_NV);
     }
 
     glStencilStrokePathNV(g_pathObj, GL_INVERT/*GL_COUNT_UP_NV*/, 0xFF);
     if(mrtMode == RENDER1STEPRGBA) // in RGBA, only provide the simple rendering to one render-target, using RGBA
     {
         g_progPR_Cst_RGBA.setUniform4f("RGBA", 0.0f, 0.0f, 0.0f, alpha);
-	    glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
-	    glCoverFillPathNV(g_pathObj, GL_CONVEX_HULL_NV);
+      glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
+      glCoverFillPathNV(g_pathObj, GL_CONVEX_HULL_NV);
     }
     else if(mrtMode == RENDER1STEP)
     {
         g_prog_Cst_OneMinusCMYK_A.setUniform4f("CMYK", 0.0f, 0.0f, 0.0f, 1.0f);
-	    glCoverStrokePathNV(g_pathObj, GL_CONVEX_HULL_NV);
+      glCoverStrokePathNV(g_pathObj, GL_CONVEX_HULL_NV);
     }
     else //if(mrtMode == RENDER2STEPS)
     {
         g_prog_Cst_OneMinusCMYK_A.setUniform4f("CMYK", 0.0f, 0.0f, 0.0f);
-	    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
-        glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
-	    glCoverStrokePathNV(g_pathObj, GL_CONVEX_HULL_NV);
+      glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
+        glDrawBuffer(GL_COLOR_ATTACHMENT0);
+      glCoverStrokePathNV(g_pathObj, GL_CONVEX_HULL_NV);
         g_prog_Cst_OneMinusCMYK_A.setUniform4f("CMYK", /*K*/1.0f);
-	    glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
-        glDrawBuffer(GL_COLOR_ATTACHMENT1_EXT);
-	    glCoverStrokePathNV(g_pathObj, GL_CONVEX_HULL_NV);
+      glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO); // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
+        glDrawBuffer(GL_COLOR_ATTACHMENT1);
+      glCoverStrokePathNV(g_pathObj, GL_CONVEX_HULL_NV);
     }
     glPopMatrix();
 }
@@ -1410,6 +1394,7 @@ void endPath()
 //------------------------------------------------------------------------------
 void MyWindow::renderScene()
 {
+    PROFILE_SECTION(__FUNCTION__);
     static vec4f colorsCMYK[] = { vec4f(1,1,0,0.0), vec4f(0,1,1,0.0), vec4f(1,0,1,0.0),
                                  vec4f(1,0,0,0.0), vec4f(0,1,0,0.0), vec4f(0,0,1,0.0), vec4f(0.4f,0,1,0.4f) };
     if(g_pathObj && g_usePathObj)
@@ -1459,14 +1444,13 @@ void renderFullscreenQuad()
 //------------------------------------------------------------------------------
 void MyWindow::display()
 {
-    NXPROFILEFUNC(__FUNCTION__);
-    WindowInertiaCamera::display();
+    AppWindowCameraInertia::display();
+    float dt = (float)m_realtime.getTiming();
     //
     // Simple camera change for animation
     //
     if(s_bCameraAnim)
     {
-      float dt = (float)m_realtime.getTiming();
       s_cameraAnimIntervals -= dt;
       if(s_cameraAnimIntervals <= 0.0)
       {
@@ -1477,119 +1461,129 @@ void MyWindow::display()
               s_cameraAnimItem = 0;
       }
     }
-
-    //glEnable(GL_FRAMEBUFFER_SRGB);
-    //
-    // Render with some CMYK colored primitives into a 2-render target destination
-    // the result will be stored in 1-(value)
-    //
-    const vec4f bgngCMYK(0.0f, 0.0f, 0.0f, 0.0f);
-    glDisable(GL_DEPTH_TEST);
-
-    // Blending
-    if(g_blendEnable)
-        glEnable(GL_BLEND);
-    else
-        glDisable(GL_BLEND);
-    glBlendEquation(blendequations[g_curBlendEquation]);
-	if(glBlendParameteriNV)
-		glBlendParameteriNV(GL_BLEND_PREMULTIPLIED_SRC_NV, GL_FALSE);
-    glBlendFunc(blendfuncs[g_blendSRC], blendfuncs[g_blendDST]);
-
-    // Bind the render targets
-    glBindFramebuffer(GL_FRAMEBUFFER, FBO::TexMS_CMYA_KA_DST);
-
-    // Clear for RT#0
-    glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
-    glClearColor(1.0f-bgngCMYK.x, 1.0f-bgngCMYK.y, 1.0f-bgngCMYK.z, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);
-    // Clear for RT#1
-    glDrawBuffer(GL_COLOR_ATTACHMENT1_EXT);
-    glClearColor(1.0f-bgngCMYK.w, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    switch(mrtMode)
+    s_profiler.beginFrame();
     {
-    case RENDER1STEP:
-        // we can do early Activation of RT#0 & RT#1
-        glDrawBuffers(2 , drawBuffers);
-        renderScene();
-        break;
-    case RENDER2STEPS:
-        // Drawbuffer target must be setup later
-        renderScene();
-        break;
-    case RENDER1STEPRGBA:
-        // we can do early Activation of RT#0
-        glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
-        renderScene();
-        break;
-    }
-    // back to regular default
-    glBlendEquation(GL_FUNC_ADD);
-    glDisable(GL_BLEND);
-    // Now we have rendered things in 2 render targets
-    // 2 solutions:
-    //  1- resolve to 2 intermediate renter Textures
-    //  2- use a Shader to directly read the 2 MSAA Textures and resolve on the flight
-    // Done. Back to the backbuffer
-    switch(blitMode)
-    {
-    case RESOLVEWITHBLIT:
-        glDisable(GL_FRAMEBUFFER_SRGB);
-        // use the HW Blit to resolve MSAA to regular texture
-        glDrawBuffers(1 , drawBuffers);
-        // Render Target 1
-        blitFBONearest(FBO::TexMS_CMYA, FBO::Tex_CMYA, 0, 0, m_winSz[0], m_winSz[1], 0, 0, m_winSz[0], m_winSz[1]);
-        // Render Target 2
-        blitFBONearest(FBO::TexMS_KA, FBO::Tex_KA, 0, 0, m_winSz[0], m_winSz[1], 0, 0, m_winSz[0], m_winSz[1]);
-        // switch back to our backbuffer and perform the conversion to RGBA
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        g_progTex_CMYA_KA_2_RGBA.enable(); // using g_glslf_Tex_CMYA_KA_2_RGBA
-        g_progTex_CMYA_KA_2_RGBA.setUniform2i("viewportSz", m_winSz[0], m_winSz[1]);
-        g_progTex_CMYA_KA_2_RGBA.setUniform4f("CMYK_Mask", g_activeC?1.0f:0.0f, g_activeM?1.0f:0.0f, g_activeY?1.0f:0.0f, g_activeK?1.0f:0.0f);
-        g_progTex_CMYA_KA_2_RGBA.bindTexture("sampler_CMYA", Texture::CMYA, GL_TEXTURE_2D, 0);
-        g_progTex_CMYA_KA_2_RGBA.bindTexture("sampler_KA", Texture::KA, GL_TEXTURE_2D, 1);
+      PROFILE_SECTION("frame");
+      NXPROFILEFUNC("frame");
+      //glEnable(GL_FRAMEBUFFER_SRGB);
+      //
+      // Render with some CMYK colored primitives into a 2-render target destination
+      // the result will be stored in 1-(value)
+      //
+      const vec4f bgngCMYK(0.0f, 0.0f, 0.0f, 0.0f);
+      glDisable(GL_DEPTH_TEST);
+
+      // Blending
+      if(g_blendEnable)
+          glEnable(GL_BLEND);
+      else
+          glDisable(GL_BLEND);
+      glBlendEquation(blendequations[g_curBlendEquation]);
+      if(glBlendParameteriNV != NULL)
+      glBlendParameteriNV(GL_BLEND_PREMULTIPLIED_SRC_NV, GL_FALSE);
+      glBlendFunc(blendfuncs[g_blendSRC], blendfuncs[g_blendDST]);
+
+      // Bind the render targets
+      glBindFramebuffer(GL_FRAMEBUFFER, FBO::TexMS_CMYA_KA_DST);
+
+      // Clear for RT#0
+      glDrawBuffer(GL_COLOR_ATTACHMENT0);
+      glClearColor(1.0f-bgngCMYK.x, 1.0f-bgngCMYK.y, 1.0f-bgngCMYK.z, 1.0f);
+      glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);
+      // Clear for RT#1
+      glDrawBuffer(GL_COLOR_ATTACHMENT1);
+      glClearColor(1.0f-bgngCMYK.w, 0.0f, 0.0f, 1.0f);
+      glClear(GL_COLOR_BUFFER_BIT);
+
+      switch(mrtMode)
+      {
+      case RENDER1STEP:
+          // we can do early Activation of RT#0 & RT#1
+          glDrawBuffers(2 , drawBuffers);
+          renderScene();
+          break;
+      case RENDER2STEPS:
+          // Drawbuffer target must be setup later
+          renderScene();
+          break;
+      case RENDER1STEPRGBA:
+          // we can do early Activation of RT#0
+          glDrawBuffer(GL_COLOR_ATTACHMENT0);
+          renderScene();
+          break;
+      }
+      // back to regular default
+      glBlendEquation(GL_FUNC_ADD);
+      glDisable(GL_BLEND);
+      // Now we have rendered things in 2 render targets
+      // 2 solutions:
+      //  1- resolve to 2 intermediate renter Textures
+      //  2- use a Shader to directly read the 2 MSAA Textures and resolve on the flight
+      // Done. Back to the backbuffer
+      switch(blitMode)
+      {
+      case RESOLVEWITHBLIT:
+          glDisable(GL_FRAMEBUFFER_SRGB);
+          // use the HW Blit to resolve MSAA to regular texture
+          glDrawBuffers(1 , drawBuffers);
+          // Render Target 1
+          blitFBONearest(FBO::TexMS_CMYA, FBO::Tex_CMYA, 0, 0, m_winSz[0], m_winSz[1], 0, 0, m_winSz[0], m_winSz[1]);
+          // Render Target 2
+          blitFBONearest(FBO::TexMS_KA, FBO::Tex_KA, 0, 0, m_winSz[0], m_winSz[1], 0, 0, m_winSz[0], m_winSz[1]);
+          // switch back to our backbuffer and perform the conversion to RGBA
+          glBindFramebuffer(GL_FRAMEBUFFER, 0);
+          g_progTex_CMYA_KA_2_RGBA.enable(); // using g_glslf_Tex_CMYA_KA_2_RGBA
+          g_progTex_CMYA_KA_2_RGBA.setUniform2i("viewportSz", m_winSz[0], m_winSz[1]);
+          g_progTex_CMYA_KA_2_RGBA.setUniform4f("CMYK_Mask", g_activeC?1.0f:0.0f, g_activeM?1.0f:0.0f, g_activeY?1.0f:0.0f, g_activeK?1.0f:0.0f);
+          g_progTex_CMYA_KA_2_RGBA.bindTexture("sampler_CMYA", Texture::CMYA, GL_TEXTURE_2D, 0);
+          g_progTex_CMYA_KA_2_RGBA.bindTexture("sampler_KA", Texture::KA, GL_TEXTURE_2D, 1);
+          // Fullscreen quad
+          renderFullscreenQuad();
+          break;
+      case RESOLVEWITHSHADERTEX:
+          glBindFramebuffer(GL_FRAMEBUFFER, 0);
+          g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].enable(); // using g_glslf_TexMS_CMYA_KA_2_RGBA
+          g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform2i("viewportSz", m_winSz[0], m_winSz[1]);
+          g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform4f("CMYK_Mask", g_activeC?1.0f:0.0f, g_activeM?1.0f:0.0f, g_activeY?1.0f:0.0f, g_activeK?1.0f:0.0f);
+          g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindTexture("samplerMS_CMYA", Texture::MS_CMYA, GL_TEXTURE_2D_MULTISAMPLE, 0);
+          g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindTexture("samplerMS_KA", Texture::MS_KA, GL_TEXTURE_2D_MULTISAMPLE, 1);
+          // Fullscreen quad
+          renderFullscreenQuad();
+          break;
+      case RESOLVEWITHSHADERIMAGE:
+          glBindFramebuffer(GL_FRAMEBUFFER, 0);
+      if(g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].getProgId())
+      {
+        g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].enable();
+        g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform2i("viewportSz", m_winSz[0], m_winSz[1]);
+        g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform4f("CMYK_Mask", g_activeC?1.0f:0.0f, g_activeM?1.0f:0.0f, g_activeY?1.0f:0.0f, g_activeK?1.0f:0.0f);
+        g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindImage("imageMS_CMYA", 0, Texture::MS_CMYA, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+        g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindImage("imageMS_KA", 1, Texture::MS_KA, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
         // Fullscreen quad
         renderFullscreenQuad();
-        break;
-    case RESOLVEWITHSHADERTEX:
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].enable(); // using g_glslf_TexMS_CMYA_KA_2_RGBA
-        g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform2i("viewportSz", m_winSz[0], m_winSz[1]);
-        g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform4f("CMYK_Mask", g_activeC?1.0f:0.0f, g_activeM?1.0f:0.0f, g_activeY?1.0f:0.0f, g_activeK?1.0f:0.0f);
-        g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindTexture("samplerMS_CMYA", Texture::MS_CMYA, GL_TEXTURE_2D_MULTISAMPLE, 0);
-        g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindTexture("samplerMS_KA", Texture::MS_KA, GL_TEXTURE_2D_MULTISAMPLE, 1);
-        // Fullscreen quad
-        renderFullscreenQuad();
-        break;
-    case RESOLVEWITHSHADERIMAGE:
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-		if(g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].getProgId())
-		{
-			g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].enable();
-			g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform2i("viewportSz", m_winSz[0], m_winSz[1]);
-			g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform4f("CMYK_Mask", g_activeC?1.0f:0.0f, g_activeM?1.0f:0.0f, g_activeY?1.0f:0.0f, g_activeK?1.0f:0.0f);
-			g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindImage("imageMS_CMYA", 0, Texture::MS_CMYA, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
-			g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindImage("imageMS_KA", 1, Texture::MS_KA, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
-			// Fullscreen quad
-			renderFullscreenQuad();
-		} else {
-			glClearColor(1.0, 0.0, 0.0, 1.0f);
-			glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);
-		}
-        break;
-    case RESOLVERGBATOBACKBUFFER:
-        blitFBONearest(FBO::TexMS_RGBA, 0/*backbuffer*/, 0, 0, m_winSz[0], m_winSz[1], 0, 0, m_winSz[0], m_winSz[1]);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        break;
-    }
-
-    ///////////////////////////////////////////////
-    // additional HUD stuff
-	WindowInertiaCamera::displayHUD();
-
+      } else {
+        glClearColor(1.0, 0.0, 0.0, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);
+      }
+          break;
+      case RESOLVERGBATOBACKBUFFER:
+          blitFBONearest(FBO::TexMS_RGBA, 0/*backbuffer*/, 0, 0, m_winSz[0], m_winSz[1], 0, 0, m_winSz[0], m_winSz[1]);
+          glBindFramebuffer(GL_FRAMEBUFFER, 0);
+          break;
+      }
+      if (g_buseUI) {
+          int width = getWidth();
+          int height = getHeight();
+          processUI(width, height, dt);
+          ImDrawData *imguiDrawData;
+          ImGui::Render();
+          imguiDrawData = ImGui::GetDrawData();
+          ImGui::RenderDrawDataGL(imguiDrawData);
+          ImGui::EndFrame();
+      }
+    } //PROFILE_SECTION("frame");
     swapBuffers();
+    s_profiler.endFrame();
 }
 /////////////////////////////////////////////////////////////////////////
 // Main initialization point
@@ -1598,8 +1592,9 @@ int sample_main(int argc, const char** argv)
 {
     // you can create more than only one
     static MyWindow myWindow;
+    SETLOGFILENAME();
 
-    NVPWindow::ContextFlags context(
+    NVPWindow::ContextFlagsGL context(
     4,      //major;
     3,      //minor;
     false,   //core;
@@ -1612,25 +1607,44 @@ int sample_main(int argc, const char** argv)
     NULL   //share;
     );
 
-    if(!myWindow.create("CMYK", &context))
-        return false;
-
-    myWindow.makeContextCurrent();
-    myWindow.swapInterval(0);
-
-	myWindow.reshape(myWindow.getWidth(), myWindow.getHeight());
-	
-	while (MyWindow::sysPollEvents(false))
+    if (!myWindow.activate(NVPWindow::WINDOW_API_OPENGL, 1280, 720, "CMYK", &context))
     {
-		while (!s_messages.empty())
-		{
-			Messages::iterator im = s_messages.begin();
-#ifdef USESVCUI // Windows only...
-			logMFCUI(im->level, im->txt.c_str());
-#endif
-			s_messages.erase(im);
-		}
-		myWindow.idle();
+        LOGE("Failed to initialize the sample\n");
+        return false;
+    }
+
+    myWindow.makeContextCurrentGL();
+    myWindow.swapInterval(0);
+    myWindow.reshape(myWindow.getWidth(), myWindow.getHeight());
+  
+  while (MyWindow::sysPollEvents(false))
+    {
+    while (!s_messages.empty())
+    {
+      Messages::iterator im = s_messages.begin();
+      s_messages.erase(im);
+    }
+    myWindow.idle();
+
+        if (myWindow.guiRegistry.checkValueChange(COMBO_MSAACOL))
+        {
+            //if check GL_NV_framebuffer_mixed_samples
+            {
+                g_MSAARaster = g_MSAAVal[g_CurMSAAColor];
+            }
+            buildRenderTargets(myWindow.getWidth(), myWindow.getHeight());
+        }
+        if (myWindow.guiRegistry.checkValueChange(COMBO_MSAARAST))
+        {
+            buildRenderTargets(myWindow.getWidth(), myWindow.getHeight());
+        }
+        if (myWindow.guiRegistry.checkValueChange(COMBO_BLENDEQ))
+        {
+            if (g_curBlendEquation == GL_ZERO) { // CHECK THIS!!
+                if (mrtMode != RENDER1STEPRGBA)
+                    mrtMode = RENDER2STEPS; // need to render only in one render-target at a time
+            }
+        }
     }
     return true;
 }
