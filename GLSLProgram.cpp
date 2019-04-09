@@ -30,7 +30,7 @@
 #include <stdlib.h>
 #include <string.h> // for strcpy() etc.
 #include <sys/stat.h>
-#include "nv_helpers/nvprint.hpp"
+#include "nvh/nvprint.hpp"
 #include "GLSLProgram.h"
 
 char* GLSLProgram::incPaths[] = {"/"};

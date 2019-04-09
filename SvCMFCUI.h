@@ -81,7 +81,7 @@ void initMFCUIBase(int x=0, int y=600, int w=400, int h=100)
             ->SetVisible();
         // Console is a window in which you can write and capture characters the user typed...
         //g_pConsole = g_pWinHandler->CreateWindowConsole("CONSOLE", "Console");
-        //g_pConsole->SetVisible();//->SetLocation(0,m_winSz[1]+32)->SetSize(m_winSz[0],200);
+        //g_pConsole->SetVisible();//->SetLocation(0,m_winSize[1]+32)->SetSize(m_winSize[0],200);
         // Show and update this control when doing long load/computation... for example
         g_pProgress = g_pWinHandler->CreateWindowProgressBar("PROG", "Loading", NULL);
         g_pProgress->SetVisible(0);

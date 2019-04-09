@@ -25,11 +25,12 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */ //--------------------------------------------------------------------
-#include "main.h"
+#include <nvpwindow.hpp>
 #include <imgui/imgui_impl_gl.h>
-#include "nv_helpers/appwindowcamerainertia.hpp"
-#include "nv_helpers_gl/profilertimers_gl.hpp"
-#include "nv_helpers_gl/extensions_gl.hpp"
+#include "nvh/appwindowcamerainertia.hpp"
+#include "nvgl/profiler_gl.hpp"
+#include "nvgl/extensions_gl.hpp"
+#include "nvgl/contextwindow_gl.hpp"
 #include "GLSLProgram.h"
 #include <list>
 
@@ -60,13 +61,11 @@ static float   s_cameraAnimIntervals= ANIMINTERVALL;
 static bool    s_bCameraAnim        = true;
 static bool    s_helpText           = false;
 
-static nv_helpers_gl::ProfilerTimersGL  s_gltimers;
-static nv_helpers::Profiler             s_profiler;
+static nvgl::ProfilerGL s_profiler;
 static double  s_statsCpuTime = 0;
 static double  s_statsGpuTime = 0;
 
-#define PROFILE_SECTION(name)   nv_helpers::Profiler::Section _tempTimer(s_profiler ,name, NULL)
-#define PROFILE_SPLIT()         s_profiler.accumulationSplit()
+#define PROFILE_SECTION(name)   nvgl::ProfilerGL::Section _tempTimer(s_profiler, name);
 
 //-----------------------------------------------------------------------------
 // Derive the Window for this sample
@@ -75,23 +74,25 @@ class MyWindow: public AppWindowCameraInertia
 {
   bool	m_validated;
 public:
-    ImGuiH::Registry    guiRegistry;
-public:
-  MyWindow() : m_validated(false) {}
-    virtual bool init();
-    virtual void shutdown();
-    virtual void reshape(int w, int h);
-    //virtual void motion(int x, int y);
-    //virtual void mousewheel(short delta);
-    //virtual void mouse(NVPWindow::MouseButton button, ButtonAction action, int mods, int x, int y);
-    //virtual void menu(int m);
-    virtual void keyboard(MyWindow::KeyCode key, ButtonAction action, int mods, int x, int y);
-    virtual void keyboardchar(unsigned char key, int mods, int x, int y);
-    //virtual void idle();
-    virtual void display();
+    ImGuiH::Registry                    m_guiRegistry;
+    nvgl::ContextWindowGL      m_contextWindowGL;
 
+    MyWindow() : m_validated(false) {}
+
+    bool create(int posX, int posY, int width, int height, const char* title, const nvgl::ContextFlagsGL &context);
     void renderScene();
     void processUI(int width, int height, double dt);
+
+    virtual void shutdown() override;
+    virtual void reshape(int w, int h) override;
+    //virtual void motion(int x, int y) override;
+    //virtual void mousewheel(short delta) override;
+    //virtual void mouse(NVPWindow::MouseButton button, ButtonAction action, int mods, int x, int y) override;
+    //virtual void menu(int m) override;
+    virtual void keyboard(MyWindow::KeyCode key, ButtonAction action, int mods, int x, int y) override;
+    virtual void keyboardchar(unsigned char key, int mods, int x, int y) override;
+    //virtual void idle() override;
+    virtual void display() override;
 };
 
 /////////////////////////////////////////////////////////////////////////
@@ -133,28 +134,27 @@ static const char *g_glslf_RGBA =
 /////////////////////////////////////////////////////////////////////////
 // FBO resolve
 
-static const char *g_glslv_Tc = 
-"#version 330\n"
-"#extension GL_ARB_separate_shader_objects : enable\n"
-"uniform ivec2 viewportSz;\n"
-"layout(location=0) in  ivec2 P;\n"
-"layout(location=0) out vec2 TcOut;\n"
-"out gl_PerVertex {\n"
-"    vec4  gl_Position;\n"
-"};\n"
-"void main() {\n"
-"   TcOut = vec2(P);\n"
-"   gl_Position = vec4(vec2(P)/vec2(viewportSz)*2.0 - 1.0, 0.0, 1.0);\n"
-"}\n"
-;
+static const char* g_glslv_Tc =
+    "#version 330\n"
+    "#extension GL_ARB_separate_shader_objects : enable\n"
+    "uniform ivec2 viewportSz;\n"
+    "layout(location=0) in  ivec2 P;\n"
+    "layout(location=0) out vec2 TcOut;\n"
+    "out gl_PerVertex {\n"
+    "    vec4  gl_Position;\n"
+    "};\n"
+    "void main() {\n"
+    "   TcOut = vec2(P);\n"
+    "   gl_Position = vec4(vec2(P)/vec2(viewportSz)*2.0 - 1.0, 0.0, 1.0);\n"
+    "}\n";
 
-#define CMYK2RGB \
-"vec3 OneMinusCMYK2RGB(in vec4 CMYK) {\n"\
-"   vec3 cmy = vec3(1-min(1.0, (CMYK.x)+(CMYK.w)),\n"\
-"                   1-min(1.0, (CMYK.y)+(CMYK.w)),\n"\
-"                   1-min(1.0, (CMYK.z)+(CMYK.w)) );\n"\
-"   return cmy;\n"\
-"}\n"
+#define CMYK2RGB                                                                                                       \
+  "vec3 OneMinusCMYK2RGB(in vec4 CMYK) {\n"                                                                            \
+  "   vec3 cmy = vec3(1-min(1.0, (CMYK.x)+(CMYK.w)),\n"                                                                \
+  "                   1-min(1.0, (CMYK.y)+(CMYK.w)),\n"                                                                \
+  "                   1-min(1.0, (CMYK.z)+(CMYK.w)) );\n"                                                              \
+  "   return cmy;\n"                                                                                                   \
+  "}\n"
 inline vec3f convertCMYK2RGB(vec4f CMYK)
 {
    return vec3f(1-nv_min(1.0f, (CMYK.x)+(CMYK.w)),
@@ -165,47 +165,46 @@ inline vec3f convertCMYK2RGB(vec4f CMYK)
 
 // sampling 2 textures and output RGBA
 static const char *g_glslf_Tex_CMYA_KA_2_RGBA = 
-"#version 330\n"
-"#extension GL_ARB_separate_shader_objects : enable\n"
-"uniform vec4 CMYK_Mask;\n"
-"uniform sampler2D sampler_CMYA;\n"
-"uniform sampler2D sampler_KA;\n"
-"layout(location=0) in vec2 Tc;\n"
-"layout(location=0) out vec4 outColor;\n"
-CMYK2RGB
-"void main() {\n"
-"   vec4 c = vec4(0);\n"
-"   float alpha = 0;\n"
-"   c = texelFetch(sampler_CMYA, ivec2(Tc), 0);\n"
-"   alpha = c.w;\n"
-"   c.w = texelFetch(sampler_KA, ivec2(Tc), 0).x;\n"
-"   outColor = vec4(OneMinusCMYK2RGB(CMYK_Mask * (1-c)), alpha);\n"
-"}\n"
-;
+    "#version 330\n"
+    "#extension GL_ARB_separate_shader_objects : enable\n"
+    "uniform vec4 CMYK_Mask;\n"
+    "uniform sampler2D sampler_CMYA;\n"
+    "uniform sampler2D sampler_KA;\n"
+    "layout(location=0) in vec2 Tc;\n"
+    "layout(location=0) out vec4 outColor;\n" CMYK2RGB
+    "void main() {\n"
+    "   vec4 c = vec4(0);\n"
+    "   float alpha = 0;\n"
+    "   c = texelFetch(sampler_CMYA, ivec2(Tc), 0);\n"
+    "   alpha = c.w;\n"
+    "   c.w = texelFetch(sampler_KA, ivec2(Tc), 0).x;\n"
+    "   outColor = vec4(OneMinusCMYK2RGB(CMYK_Mask * (1-c)), alpha);\n"
+    "}\n";
 
 // for sampling MSAA Texture
-#define DEFINE_GLSLF_TEXMS_CMYA_KA_2_RGBA(n, msaa)\
-static const char * n = \
-"#version 330\n"\
-"#extension GL_ARB_separate_shader_objects : enable\n"\
-"uniform vec4 CMYK_Mask;\n"\
-"uniform sampler2DMS samplerMS_CMYA;\n"\
-"uniform sampler2DMS samplerMS_KA;\n"\
-"layout(location=0) in vec2 Tc;\n"\
-"layout(location=0) out vec4 outColor;\n"\
-CMYK2RGB\
-"void main() {\n"\
-"   vec4 c = vec4(0);\n"\
-"   float alpha = 0;\n"\
-"   for(int i=0; i<" #msaa "; i++) {\n"\
-"       vec4 tex;\n"\
-"       tex = texelFetch(samplerMS_CMYA, ivec2(Tc), i);\n"\
-"       alpha += tex.w;"\
-"       tex.w = texelFetch(samplerMS_KA, ivec2(Tc), i).x;\n"\
-"       c += tex;"\
-"   }\n"\
-"   outColor = vec4(OneMinusCMYK2RGB(CMYK_Mask * (1-(c / " #msaa "))), alpha/" #msaa ");\n"\
-"}\n";
+#define DEFINE_GLSLF_TEXMS_CMYA_KA_2_RGBA(VAR, msaa)                                                                   \
+static const char* VAR =                                                                                               \
+      "#version 330\n"                                                                                                 \
+      "#extension GL_ARB_separate_shader_objects : enable\n"                                                           \
+      "uniform vec4 CMYK_Mask;\n"                                                                                      \
+      "uniform sampler2DMS samplerMS_CMYA;\n"                                                                          \
+      "uniform sampler2DMS samplerMS_KA;\n"                                                                            \
+      "layout(location=0) in vec2 Tc;\n"                                                                               \
+      "layout(location=0) out vec4 outColor;\n" CMYK2RGB                                                               \
+      "void main() {\n"                                                                                                \
+      "   vec4 c = vec4(0);\n"                                                                                         \
+      "   float alpha = 0;\n"                                                                                          \
+      "   for(int i=0; i<" #msaa                                                                                       \
+      "; i++) {\n"                                                                                                     \
+      "       vec4 tex;\n"                                                                                             \
+      "       tex = texelFetch(samplerMS_CMYA, ivec2(Tc), i);\n"                                                       \
+      "       alpha += tex.w;"                                                                                         \
+      "       tex.w = texelFetch(samplerMS_KA, ivec2(Tc), i).x;\n"                                                     \
+      "       c += tex;"                                                                                               \
+      "   }\n"                                                                                                         \
+      "   outColor = vec4(OneMinusCMYK2RGB(CMYK_Mask * (1-(c / " #msaa "))), alpha/" #msaa                             \
+      ");\n"                                                                                                           \
+      "}\n";
 
 DEFINE_GLSLF_TEXMS_CMYA_KA_2_RGBA(g_glslf_TexMS_CMYA_KA_2_RGBA_2x, 2)
 DEFINE_GLSLF_TEXMS_CMYA_KA_2_RGBA(g_glslf_TexMS_CMYA_KA_2_RGBA_8x, 8)
@@ -217,27 +216,28 @@ static const char *g_glslf_TexMS_CMYA_KA_2_RGBA[3] = {
 };
 
 // for sampling MSAA Texture
-#define DEFINE_GLSLF_IMAGEMS_CMYA_KA_2_RGBA(n, msaa)\
-static const char *n = \
-"#version 420\n"\
-"uniform vec4 CMYK_Mask;\n"\
-"uniform layout(rgba8) image2DMS imageMS_CMYA;\n"\
-"uniform layout(rgba8) image2DMS imageMS_KA;\n"\
-"layout(location=0) in vec2 Tc;\n"\
-"layout(location=0) out vec4 outColor;\n"\
-CMYK2RGB\
-"void main() {\n"\
-"   vec4 c = vec4(0);\n"\
-"   float alpha = 0;\n"\
-"   for(int i=0; i<" #msaa "; i++) {\n"\
-"       vec4 tex;\n"\
-"       tex = imageLoad(imageMS_CMYA, ivec2(Tc), i);\n"\
-"       alpha += tex.w;"\
-"       tex.w = imageLoad(imageMS_KA, ivec2(Tc), i).x;\n"\
-"       c += tex;"\
-"   }\n"\
-"   outColor = vec4(OneMinusCMYK2RGB(CMYK_Mask * (1-(c / " #msaa "))), alpha/" #msaa ");\n"\
-"}\n";
+#define DEFINE_GLSLF_IMAGEMS_CMYA_KA_2_RGBA(VAR, msaa)                                                                 \
+static const char* VAR =                                                                                               \
+      "#version 420\n"                                                                                                 \
+      "uniform vec4 CMYK_Mask;\n"                                                                                      \
+      "uniform layout(rgba8) image2DMS imageMS_CMYA;\n"                                                                \
+      "uniform layout(rgba8) image2DMS imageMS_KA;\n"                                                                  \
+      "layout(location=0) in vec2 Tc;\n"                                                                               \
+      "layout(location=0) out vec4 outColor;\n" CMYK2RGB                                                               \
+      "void main() {\n"                                                                                                \
+      "   vec4 c = vec4(0);\n"                                                                                         \
+      "   float alpha = 0;\n"                                                                                          \
+      "   for(int i=0; i<" #msaa                                                                                       \
+      "; i++) {\n"                                                                                                     \
+      "       vec4 tex;\n"                                                                                             \
+      "       tex = imageLoad(imageMS_CMYA, ivec2(Tc), i);\n"                                                          \
+      "       alpha += tex.w;"                                                                                         \
+      "       tex.w = imageLoad(imageMS_KA, ivec2(Tc), i).x;\n"                                                        \
+      "       c += tex;"                                                                                               \
+      "   }\n"                                                                                                         \
+      "   outColor = vec4(OneMinusCMYK2RGB(CMYK_Mask * (1-(c / " #msaa "))), alpha/" #msaa                             \
+      ");\n"                                                                                                           \
+      "}\n";
 
 DEFINE_GLSLF_IMAGEMS_CMYA_KA_2_RGBA(g_glslf_ImageMS_CMYA_KA_2_RGBA_2x, 2)
 DEFINE_GLSLF_IMAGEMS_CMYA_KA_2_RGBA(g_glslf_ImageMS_CMYA_KA_2_RGBA_8x, 8)
@@ -452,12 +452,9 @@ struct LogMessage {
   std::string txt;
 };
 typedef std::list<LogMessage> Messages;
-static Messages s_messages;
 //------------------------------------------------------------------------------
 void sample_print(int level, const char * txt)
 {
-  // normally we should enter a critical section...
-  s_messages.push_back(LogMessage(level, txt));
 }
 
 //------------------------------------------------------------------------------
@@ -492,31 +489,31 @@ void MyWindow::processUI(int width, int height, double dt)
         //
         // Blit modes
         //
-        guiRegistry.enumCombobox(COMBO_BLITMODE, "Blit Mode", &blitMode);
+        m_guiRegistry.enumCombobox(COMBO_BLITMODE, "Blit Mode", &blitMode);
         //
         // render mode on Muyltiple render-targets
         //
-        guiRegistry.enumCombobox(COMBO_MRTMODE, "Render Pass", &mrtMode);
+        m_guiRegistry.enumCombobox(COMBO_MRTMODE, "Render Pass", &mrtMode);
         //
         // Color samples combo
         //
-        guiRegistry.enumCombobox(COMBO_MSAACOL, "MSAA Color samples", &g_CurMSAAColor);
+        m_guiRegistry.enumCombobox(COMBO_MSAACOL, "MSAA Color samples", &g_CurMSAAColor);
         //
         // Mixed samples combo
         //
         if (g_has_GL_NV_framebuffer_mixed_samples)
         {
-            guiRegistry.enumCombobox(COMBO_MSAARAST, "MSAA Raster samples", &g_MSAARaster);
+            m_guiRegistry.enumCombobox(COMBO_MSAARAST, "MSAA Raster samples", &g_MSAARaster);
         }
         //
         // Blending Equations
         //
-        guiRegistry.enumCombobox(COMBO_BLENDEQ, "Blend Equation", &g_curBlendEquation);
+        m_guiRegistry.enumCombobox(COMBO_BLENDEQ, "Blend Equation", &g_curBlendEquation);
         //
         // Blending Funcs
         //
-        guiRegistry.enumCombobox(COMBO_BLENDFNSRC, "Blend Func SRC", &g_blendSRC);
-        guiRegistry.enumCombobox(COMBO_BLENDFNDST, "Blend Func DST", &g_blendDST);
+        m_guiRegistry.enumCombobox(COMBO_BLENDFNSRC, "Blend Func SRC", &g_blendSRC);
+        m_guiRegistry.enumCombobox(COMBO_BLENDFNDST, "Blend Func DST", &g_blendDST);
         //
         // Global transparency
         //
@@ -1016,156 +1013,158 @@ void buildRenderTargets(int w, int h)
 //------------------------------------------------------------------------------
 //
 //------------------------------------------------------------------------------
-bool MyWindow::init()
+bool MyWindow::create(int posX, int posY, int width, int height, const char* title, const nvgl::ContextFlagsGL &context)
 {
-  if(!AppWindowCameraInertia::init())
-    return false;
-    ImGui::InitGL();
-    s_gltimers.init(10);
-    s_profiler.init();
-    s_profiler.setDefaultGPUInterface(&s_gltimers);
+	if(!AppWindowCameraInertia::create(posX, posY, width, height, title))
+		return false;
+  m_contextWindowGL.init(&context, this);
+  ImGui::InitGL();
+  s_profiler.init();
 
 
-    m_camera.curEyePos = m_camera.eyePos = vec3f(0,0,3.0f);
-    LOGI("'1': Blit used for MSAA resolve");
-    LOGI("'2': TexelFetch used on MSAA Texture to resolve");
-    LOGI("'3': ImageLoad used on MSAA Texture to resolve");
-    //
-    // UI
-    //
-    auto &imgui_io = ImGui::GetIO();
-    imgui_io.IniFilename = nullptr;
-    guiRegistry.enumAdd(COMBO_BLITMODE, RESOLVEWITHBLIT, "Resolve with Blit");
-    guiRegistry.enumAdd(COMBO_BLITMODE, RESOLVEWITHSHADERTEX, "Resolve with Shader&Texture Fetch");
-    guiRegistry.enumAdd(COMBO_BLITMODE, RESOLVEWITHSHADERIMAGE, "Resolve with Shader&Image Load");
-    guiRegistry.enumAdd(COMBO_BLITMODE, RESOLVERGBATOBACKBUFFER, "Resolve with blit : RGBA to backbuffer");
-    guiRegistry.enumAdd(COMBO_MRTMODE, RENDER1STEP, "Render CMYA & KA to 2 RTs at a time");
-    guiRegistry.enumAdd(COMBO_MRTMODE, RENDER2STEPS, "Render CMYA to RT#0 then KA to RT#1");
-    guiRegistry.enumAdd(COMBO_MRTMODE, RENDER1STEPRGBA, "Render RGBA to RT#0 only");
-    guiRegistry.enumAdd(COMBO_MSAACOL, 0, "MSAA OFF");
-    guiRegistry.enumAdd(COMBO_MSAACOL, 1, "MSAA 2x");
-    guiRegistry.enumAdd(COMBO_MSAACOL, 2, "MSAA 8x");
+  m_camera.curEyePos = m_camera.eyePos = vec3f(0,0,3.0f);
+  LOGI("'1': Blit used for MSAA resolve");
+  LOGI("'2': TexelFetch used on MSAA Texture to resolve");
+  LOGI("'3': ImageLoad used on MSAA Texture to resolve");
+  //
+  // UI
+  //
+  auto &imgui_io = ImGui::GetIO();
+  imgui_io.IniFilename = nullptr;
+  m_guiRegistry.enumAdd(COMBO_BLITMODE, RESOLVEWITHBLIT, "Resolve with Blit");
+  m_guiRegistry.enumAdd(COMBO_BLITMODE, RESOLVEWITHSHADERTEX, "Resolve with Shader&Texture Fetch");
+  m_guiRegistry.enumAdd(COMBO_BLITMODE, RESOLVEWITHSHADERIMAGE, "Resolve with Shader&Image Load");
+  m_guiRegistry.enumAdd(COMBO_BLITMODE, RESOLVERGBATOBACKBUFFER, "Resolve with blit : RGBA to backbuffer");
+  m_guiRegistry.enumAdd(COMBO_MRTMODE, RENDER1STEP, "Render CMYA & KA to 2 RTs at a time");
+  m_guiRegistry.enumAdd(COMBO_MRTMODE, RENDER2STEPS, "Render CMYA to RT#0 then KA to RT#1");
+  m_guiRegistry.enumAdd(COMBO_MRTMODE, RENDER1STEPRGBA, "Render RGBA to RT#0 only");
+  m_guiRegistry.enumAdd(COMBO_MSAACOL, 0, "MSAA OFF");
+  m_guiRegistry.enumAdd(COMBO_MSAACOL, 1, "MSAA 2x");
+  m_guiRegistry.enumAdd(COMBO_MSAACOL, 2, "MSAA 8x");
     
-    // TODO check "GL_NV_framebuffer_mixed_samples")
-    {
-        g_has_GL_NV_framebuffer_mixed_samples = true;
-        guiRegistry.enumAdd(COMBO_MSAARAST, 2, "MSAA 2x");
-        guiRegistry.enumAdd(COMBO_MSAARAST, 4, "MSAA 4x");
-        guiRegistry.enumAdd(COMBO_MSAARAST, 8, "MSAA 8x");
-        guiRegistry.enumAdd(COMBO_MSAARAST, 16, "MSAA 16x");
-    }
-    for (int be = 0; blendequations[be] != GL_ZERO; be++)
-    {
-        guiRegistry.enumAdd(COMBO_BLENDEQ, be, blendequationNames[be]);
-    }
-    for (int be = 0; blendfuncs[be] != GL_ZERO; be++)
-    {
-        guiRegistry.enumAdd(COMBO_BLENDFNSRC, be, blendfuncNames[be]);
-    }
-    for (int be = 0; blendfuncs[be] != GL_ZERO; be++)
-    {
-        guiRegistry.enumAdd(COMBO_BLENDFNDST, be, blendfuncNames[be]);
-    }
+  // TODO check "GL_NV_framebuffer_mixed_samples")
+  {
+      g_has_GL_NV_framebuffer_mixed_samples = true;
+      m_guiRegistry.enumAdd(COMBO_MSAARAST, 2, "MSAA 2x");
+      m_guiRegistry.enumAdd(COMBO_MSAARAST, 4, "MSAA 4x");
+      m_guiRegistry.enumAdd(COMBO_MSAARAST, 8, "MSAA 8x");
+      m_guiRegistry.enumAdd(COMBO_MSAARAST, 16, "MSAA 16x");
+  }
+  for (int be = 0; blendequations[be] != GL_ZERO; be++)
+  {
+      m_guiRegistry.enumAdd(COMBO_BLENDEQ, be, blendequationNames[be]);
+  }
+  for (int be = 0; blendfuncs[be] != GL_ZERO; be++)
+  {
+      m_guiRegistry.enumAdd(COMBO_BLENDFNSRC, be, blendfuncNames[be]);
+  }
+  for (int be = 0; blendfuncs[be] != GL_ZERO; be++)
+  {
+      m_guiRegistry.enumAdd(COMBO_BLENDFNDST, be, blendfuncNames[be]);
+  }
 
-    m_realtime.bNonStopRendering = true;
-    //
-    // Shader Programs for rasterization
-    //
-    if(!g_prog_Cst_OneMinusCMYK_A.compileProgram(g_glslv_WVP_Position, NULL, g_glslf_OneMinusCMYK_A))
-        return false;
-    if(!g_progPR_Cst_OneMinusCMYK_A.compileProgram(NULL, NULL, g_glslf_OneMinusCMYK_A))
-        return false;
-    if(!g_prog_Cst_RGBA.compileProgram(g_glslv_WVP_Position, NULL, g_glslf_RGBA))
-        return false;
-    if(!g_progPR_Cst_RGBA.compileProgram(NULL, NULL, g_glslf_RGBA))
-        return false;
-    //
-    // Shader Programs for fullscreen processing
-    //
-    for(int i=0; i<3; i++)
-    {
-        if(!g_progTexMS_CMYA_KA_2_RGBA[i].compileProgram(g_glslv_Tc, NULL, g_glslf_TexMS_CMYA_KA_2_RGBA[i]))
-            return false;
-        if(!g_progImageMS_CMYA_KA_2_RGBA[i].compileProgram(g_glslv_Tc, NULL, g_glslf_ImageMS_CMYA_KA_2_RGBA[i]))
-            return false;
-    }
-    if(!g_progTex_CMYA_KA_2_RGBA.compileProgram(g_glslv_Tc, NULL, g_glslf_Tex_CMYA_KA_2_RGBA))
-        return false;
-    //
-    // Misc OGL setup
-    //
-    glClearColor(0.0f, 0.1f, 0.1f, 1.0f);
-    glGenVertexArrays(1, &g_vao);
-    glBindVertexArray(g_vao);
-    //
-    // Circle
-    //
-    glGenBuffers(1, &g_vboCircle);
-    glBindBuffer(GL_ARRAY_BUFFER, g_vboCircle);
-    #define SUBDIVS 180
-    #define CIRCLESZ 0.5f
-    vec3f *data = new vec3f[SUBDIVS + 2];
-    vec3f *p = data;
-    int j=0;
-    *(p++) = vec3f(0,0,0);
-    for(int i=0; i<SUBDIVS+1; i++)
-    {
-        float a = nv_to_rad * (float)i * (360.0f/(float)SUBDIVS);
-        vec3f v(CIRCLESZ * cosf(a), CIRCLESZ * sinf(a), 0.0f);
-        *(p++) = v;
-    }
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vec3f)*(SUBDIVS + 2), data[0].vec_array, GL_STATIC_DRAW);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    //
-    // NV-Path rendering
-    //
-    // TODO check GL_NV_path_rendering
-    {
-        g_usePathObj = true;
-        g_pathObj = glGenPathsNV(1);
-        static const GLubyte pathCommands[10] =
-            { GL_MOVE_TO_NV, GL_LINE_TO_NV, GL_LINE_TO_NV, GL_LINE_TO_NV,
-            GL_LINE_TO_NV, GL_CLOSE_PATH_NV,
-            'M', 'C', 'C', 'Z' };  // character aliases
-        static const float scale = 1.0f/500.0f;
-        static const float x0 = 250.0f;
-        static const float y0 = 250.0f;
-        #define COORD(x,y) { scale*(x-x0), scale*(y-y0) }
-        static const GLfloat pathCoords[12][2] =
-            { COORD(100, 180), COORD(40, 10), COORD(190, 120), COORD(10, 120), COORD(160, 10),
-            COORD(300,300), COORD(100,400), COORD(100,200), COORD(300,100),
-            COORD(500,200), COORD(500,400), COORD(300,300) };
-        glPathCommandsNV(g_pathObj, 10, pathCommands, 24, GL_FLOAT, pathCoords);
+  m_realtime.bNonStopRendering = true;
+  //
+  // Shader Programs for rasterization
+  //
+  if(!g_prog_Cst_OneMinusCMYK_A.compileProgram(g_glslv_WVP_Position, NULL, g_glslf_OneMinusCMYK_A))
+      return false;
+  if(!g_progPR_Cst_OneMinusCMYK_A.compileProgram(NULL, NULL, g_glslf_OneMinusCMYK_A))
+      return false;
+  if(!g_prog_Cst_RGBA.compileProgram(g_glslv_WVP_Position, NULL, g_glslf_RGBA))
+      return false;
+  if(!g_progPR_Cst_RGBA.compileProgram(NULL, NULL, g_glslf_RGBA))
+      return false;
+  //
+  // Shader Programs for fullscreen processing
+  //
+  for(int i=0; i<3; i++)
+  {
+      if(!g_progTexMS_CMYA_KA_2_RGBA[i].compileProgram(g_glslv_Tc, NULL, g_glslf_TexMS_CMYA_KA_2_RGBA[i]))
+          return false;
+      if(!g_progImageMS_CMYA_KA_2_RGBA[i].compileProgram(g_glslv_Tc, NULL, g_glslf_ImageMS_CMYA_KA_2_RGBA[i]))
+          return false;
+  }
+  if(!g_progTex_CMYA_KA_2_RGBA.compileProgram(g_glslv_Tc, NULL, g_glslf_Tex_CMYA_KA_2_RGBA))
+      return false;
+  //
+  // Misc OGL setup
+  //
+  glClearColor(0.0f, 0.1f, 0.1f, 1.0f);
+  glGenVertexArrays(1, &g_vao);
+  glBindVertexArray(g_vao);
+  //
+  // Circle
+  //
+  glGenBuffers(1, &g_vboCircle);
+  glBindBuffer(GL_ARRAY_BUFFER, g_vboCircle);
+  #define SUBDIVS 180
+  #define CIRCLESZ 0.5f
+  vec3f *data = new vec3f[SUBDIVS + 2];
+  vec3f *p = data;
+  int j=0;
+  *(p++) = vec3f(0,0,0);
+  for(int i=0; i<SUBDIVS+1; i++)
+  {
+      float a = nv_to_rad * (float)i * (360.0f/(float)SUBDIVS);
+      vec3f v(CIRCLESZ * cosf(a), CIRCLESZ * sinf(a), 0.0f);
+      *(p++) = v;
+  }
+  glBufferData(GL_ARRAY_BUFFER, sizeof(vec3f)*(SUBDIVS + 2), data[0].vec_array, GL_STATIC_DRAW);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  //
+  // NV-Path rendering
+  //
+  // TODO check GL_NV_path_rendering
+  {
+      g_usePathObj = true;
+      g_pathObj = glGenPathsNV(1);
+      static const GLubyte pathCommands[10] =
+          { GL_MOVE_TO_NV, GL_LINE_TO_NV, GL_LINE_TO_NV, GL_LINE_TO_NV,
+          GL_LINE_TO_NV, GL_CLOSE_PATH_NV,
+          'M', 'C', 'C', 'Z' };  // character aliases
+      static const float scale = 1.0f/500.0f;
+      static const float x0 = 250.0f;
+      static const float y0 = 250.0f;
+      #define COORD(x,y) { scale*(x-x0), scale*(y-y0) }
+      static const GLfloat pathCoords[12][2] =
+          { COORD(100, 180), COORD(40, 10), COORD(190, 120), COORD(10, 120), COORD(160, 10),
+          COORD(300,300), COORD(100,400), COORD(100,200), COORD(300,100),
+          COORD(500,200), COORD(500,400), COORD(300,300) };
+      glPathCommandsNV(g_pathObj, 10, pathCommands, 24, GL_FLOAT, pathCoords);
 
-        glPathParameterfNV(g_pathObj, GL_PATH_STROKE_WIDTH_NV, 0.01f);
-      glPathParameteriNV(g_pathObj, GL_PATH_JOIN_STYLE_NV, GL_ROUND_NV);
-    } 
-    //else {
-    //    g_usePathObj = false;
-    //}
-    //
-    // NV_framebuffer_mixed_samples
-    //
-    // TODO check GL_NV_framebuffer_mixed_samples
-    {
-        g_MSAARaster = 8;
-        //glEnable(GL_RASTER_MULTISAMPLE);
-        //glRasterSamplesEXT(g_MSAARaster, GL_TRUE);
-        glCoverageModulationNV(GL_RGBA);
-        LOGI("GL_NV_framebuffer_mixed_samples detected: color MSAA= %d; MSAA for DST=%d\n", g_MSAAVal[g_CurMSAAColor], g_MSAARaster);
-    }
-    // --------------------------------------------
-    // FBOs
-    //
-    buildRenderTargets(m_winSz[0], m_winSz[1]);
+      glPathParameterfNV(g_pathObj, GL_PATH_STROKE_WIDTH_NV, 0.01f);
+    glPathParameteriNV(g_pathObj, GL_PATH_JOIN_STYLE_NV, GL_ROUND_NV);
+  } 
+  //else {
+  //    g_usePathObj = false;
+  //}
+  //
+  // NV_framebuffer_mixed_samples
+  //
+  // TODO check GL_NV_framebuffer_mixed_samples
+  {
+      g_MSAARaster = 8;
+      //glEnable(GL_RASTER_MULTISAMPLE);
+      //glRasterSamplesEXT(g_MSAARaster, GL_TRUE);
+      glCoverageModulationNV(GL_RGBA);
+      LOGI("GL_NV_framebuffer_mixed_samples detected: color MSAA= %d; MSAA for DST=%d\n", g_MSAAVal[g_CurMSAAColor], g_MSAARaster);
+  }
+  // --------------------------------------------
+  // FBOs
+  //
+  buildRenderTargets(m_windowSize[0], m_windowSize[1]);
 
   m_validated = true;
-    return true;
+  return true;
 }
 //------------------------------------------------------------------------------
 void MyWindow::shutdown()
 {
-    s_gltimers.deinit();
+    s_profiler.deinit();
+    ImGui::ShutdownGL();
+    AppWindowCameraInertia::shutdown();
+    m_contextWindowGL.deinit();
 }
 
 //------------------------------------------------------------------------------
@@ -1527,13 +1526,13 @@ void MyWindow::display()
           // use the HW Blit to resolve MSAA to regular texture
           glDrawBuffers(1 , drawBuffers);
           // Render Target 1
-          blitFBONearest(FBO::TexMS_CMYA, FBO::Tex_CMYA, 0, 0, m_winSz[0], m_winSz[1], 0, 0, m_winSz[0], m_winSz[1]);
+          blitFBONearest(FBO::TexMS_CMYA, FBO::Tex_CMYA, 0, 0, m_windowSize[0], m_windowSize[1], 0, 0, m_windowSize[0], m_windowSize[1]);
           // Render Target 2
-          blitFBONearest(FBO::TexMS_KA, FBO::Tex_KA, 0, 0, m_winSz[0], m_winSz[1], 0, 0, m_winSz[0], m_winSz[1]);
+          blitFBONearest(FBO::TexMS_KA, FBO::Tex_KA, 0, 0, m_windowSize[0], m_windowSize[1], 0, 0, m_windowSize[0], m_windowSize[1]);
           // switch back to our backbuffer and perform the conversion to RGBA
           glBindFramebuffer(GL_FRAMEBUFFER, 0);
           g_progTex_CMYA_KA_2_RGBA.enable(); // using g_glslf_Tex_CMYA_KA_2_RGBA
-          g_progTex_CMYA_KA_2_RGBA.setUniform2i("viewportSz", m_winSz[0], m_winSz[1]);
+          g_progTex_CMYA_KA_2_RGBA.setUniform2i("viewportSz", m_windowSize[0], m_windowSize[1]);
           g_progTex_CMYA_KA_2_RGBA.setUniform4f("CMYK_Mask", g_activeC?1.0f:0.0f, g_activeM?1.0f:0.0f, g_activeY?1.0f:0.0f, g_activeK?1.0f:0.0f);
           g_progTex_CMYA_KA_2_RGBA.bindTexture("sampler_CMYA", Texture::CMYA, GL_TEXTURE_2D, 0);
           g_progTex_CMYA_KA_2_RGBA.bindTexture("sampler_KA", Texture::KA, GL_TEXTURE_2D, 1);
@@ -1543,7 +1542,7 @@ void MyWindow::display()
       case RESOLVEWITHSHADERTEX:
           glBindFramebuffer(GL_FRAMEBUFFER, 0);
           g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].enable(); // using g_glslf_TexMS_CMYA_KA_2_RGBA
-          g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform2i("viewportSz", m_winSz[0], m_winSz[1]);
+          g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform2i("viewportSz", m_windowSize[0], m_windowSize[1]);
           g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform4f("CMYK_Mask", g_activeC?1.0f:0.0f, g_activeM?1.0f:0.0f, g_activeY?1.0f:0.0f, g_activeK?1.0f:0.0f);
           g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindTexture("samplerMS_CMYA", Texture::MS_CMYA, GL_TEXTURE_2D_MULTISAMPLE, 0);
           g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindTexture("samplerMS_KA", Texture::MS_KA, GL_TEXTURE_2D_MULTISAMPLE, 1);
@@ -1555,7 +1554,7 @@ void MyWindow::display()
       if(g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].getProgId())
       {
         g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].enable();
-        g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform2i("viewportSz", m_winSz[0], m_winSz[1]);
+        g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform2i("viewportSz", m_windowSize[0], m_windowSize[1]);
         g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform4f("CMYK_Mask", g_activeC?1.0f:0.0f, g_activeM?1.0f:0.0f, g_activeY?1.0f:0.0f, g_activeK?1.0f:0.0f);
         g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindImage("imageMS_CMYA", 0, Texture::MS_CMYA, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
         g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindImage("imageMS_KA", 1, Texture::MS_KA, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
@@ -1567,7 +1566,7 @@ void MyWindow::display()
       }
           break;
       case RESOLVERGBATOBACKBUFFER:
-          blitFBONearest(FBO::TexMS_RGBA, 0/*backbuffer*/, 0, 0, m_winSz[0], m_winSz[1], 0, 0, m_winSz[0], m_winSz[1]);
+          blitFBONearest(FBO::TexMS_RGBA, 0/*backbuffer*/, 0, 0, m_windowSize[0], m_windowSize[1], 0, 0, m_windowSize[0], m_windowSize[1]);
           glBindFramebuffer(GL_FRAMEBUFFER, 0);
           break;
       }
@@ -1582,19 +1581,20 @@ void MyWindow::display()
           ImGui::EndFrame();
       }
     } //PROFILE_SECTION("frame");
-    swapBuffers();
+    m_contextWindowGL.swapBuffers();
     s_profiler.endFrame();
 }
 /////////////////////////////////////////////////////////////////////////
 // Main initialization point
 //
-int sample_main(int argc, const char** argv)
+int main(int argc, const char** argv)
 {
+    NVPWindow::System system(argv[0], PROJECT_NAME);
+
     // you can create more than only one
     static MyWindow myWindow;
-    SETLOGFILENAME();
 
-    NVPWindow::ContextFlagsGL context(
+    nvgl::ContextFlagsGL context(
     4,      //major;
     3,      //minor;
     false,   //core;
@@ -1607,44 +1607,44 @@ int sample_main(int argc, const char** argv)
     NULL   //share;
     );
 
-    if (!myWindow.activate(NVPWindow::WINDOW_API_OPENGL, 1280, 720, "CMYK", &context))
+    if(!myWindow.create(0,0,1280, 720, "CMYK", context))
     {
         LOGE("Failed to initialize the sample\n");
         return false;
     }
 
-    myWindow.makeContextCurrentGL();
-    myWindow.swapInterval(0);
+    myWindow.m_contextWindowGL.makeContextCurrent();
+    myWindow.m_contextWindowGL.swapInterval(0);
     myWindow.reshape(myWindow.getWidth(), myWindow.getHeight());
   
-  while (MyWindow::sysPollEvents(false))
+    while (MyWindow::sysPollEvents(false))
     {
-    while (!s_messages.empty())
-    {
-      Messages::iterator im = s_messages.begin();
-      s_messages.erase(im);
-    }
-    myWindow.idle();
+      myWindow.idle();
+      if(myWindow.m_renderCnt > 0)
+      {
+          myWindow.m_renderCnt--;
+          myWindow.display();
+      }
 
-        if (myWindow.guiRegistry.checkValueChange(COMBO_MSAACOL))
+      if (myWindow.m_guiRegistry.checkValueChange(COMBO_MSAACOL))
+      {
+        //if check GL_NV_framebuffer_mixed_samples
         {
-            //if check GL_NV_framebuffer_mixed_samples
-            {
-                g_MSAARaster = g_MSAAVal[g_CurMSAAColor];
-            }
-            buildRenderTargets(myWindow.getWidth(), myWindow.getHeight());
+            g_MSAARaster = g_MSAAVal[g_CurMSAAColor];
         }
-        if (myWindow.guiRegistry.checkValueChange(COMBO_MSAARAST))
-        {
-            buildRenderTargets(myWindow.getWidth(), myWindow.getHeight());
-        }
-        if (myWindow.guiRegistry.checkValueChange(COMBO_BLENDEQ))
-        {
-            if (g_curBlendEquation == GL_ZERO) { // CHECK THIS!!
-                if (mrtMode != RENDER1STEPRGBA)
-                    mrtMode = RENDER2STEPS; // need to render only in one render-target at a time
-            }
-        }
+        buildRenderTargets(myWindow.getWidth(), myWindow.getHeight());
+      }
+      if (myWindow.m_guiRegistry.checkValueChange(COMBO_MSAARAST))
+      {
+          buildRenderTargets(myWindow.getWidth(), myWindow.getHeight());
+      }
+      if (myWindow.m_guiRegistry.checkValueChange(COMBO_BLENDEQ))
+      {
+          if (g_curBlendEquation == GL_ZERO) { // CHECK THIS!!
+              if (mrtMode != RENDER1STEPRGBA)
+                  mrtMode = RENDER2STEPS; // need to render only in one render-target at a time
+          }
+      }
     }
     return true;
 }
