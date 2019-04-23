@@ -378,7 +378,7 @@ bool        g_activeK = true;
 bool        g_blendEnable = true;
 int         g_MSAARaster = 8;
 int         g_MSAAVal[] = {1, 2, 8, 16};
-int         g_CurMSAAColor = 2;
+int         g_CurMSAAColor = 0;
 bool        g_has_GL_NV_framebuffer_mixed_samples = false;
 bool        g_buseUI = true;
 
@@ -921,12 +921,12 @@ void deleteRenderTargets()
 void buildRenderTargets(int w, int h)
 {
     deleteRenderTargets();
-    // TODO check "GL_NV_framebuffer_mixed_samples"
+    if(g_has_GL_NV_framebuffer_mixed_samples)
     {
         if(g_MSAARaster < g_MSAAVal[g_CurMSAAColor])
             g_MSAARaster = g_MSAAVal[g_CurMSAAColor];
     }
-    //else g_MSAARaster = g_MSAAVal[g_CurMSAAColor];
+    else g_MSAARaster = g_MSAAVal[g_CurMSAAColor];
 
     LOGI("Building Render targets with MSAA Color = %d and MSAA Raster = %d\n", g_MSAAVal[g_CurMSAAColor], g_MSAARaster);
     fboSz[0] = w;
@@ -1628,7 +1628,7 @@ int main(int argc, const char** argv)
 
       if (myWindow.m_guiRegistry.checkValueChange(COMBO_MSAACOL))
       {
-        //if check GL_NV_framebuffer_mixed_samples
+        if(!g_has_GL_NV_framebuffer_mixed_samples)
         {
             g_MSAARaster = g_MSAAVal[g_CurMSAAColor];
         }
