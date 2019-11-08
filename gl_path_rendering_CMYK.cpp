@@ -75,24 +75,24 @@ class MyWindow: public AppWindowCameraInertia
   bool	m_validated;
 public:
     ImGuiH::Registry                    m_guiRegistry;
-    nvgl::ContextWindowGL      m_contextWindowGL;
+    nvgl::ContextWindow      m_contextWindowGL;
 
     MyWindow() : m_validated(false) {}
 
-    bool create(int posX, int posY, int width, int height, const char* title, const nvgl::ContextFlagsGL &context);
+    bool open(int posX, int posY, int width, int height, const char* title, const nvgl::ContextWindowCreateInfo &context);
     void renderScene();
     void processUI(int width, int height, double dt);
 
-    virtual void shutdown() override;
-    virtual void reshape(int w, int h) override;
+    virtual void onWindowClose() override;
+    virtual void onWindowResize(int w, int h) override;
     //virtual void motion(int x, int y) override;
     //virtual void mousewheel(short delta) override;
     //virtual void mouse(NVPWindow::MouseButton button, ButtonAction action, int mods, int x, int y) override;
     //virtual void menu(int m) override;
-    virtual void keyboard(MyWindow::KeyCode key, ButtonAction action, int mods, int x, int y) override;
-    virtual void keyboardchar(unsigned char key, int mods, int x, int y) override;
+    virtual void onKeyboard(MyWindow::KeyCode key, ButtonAction action, int mods, int x, int y) override;
+    virtual void onKeyboardChar(unsigned char key, int mods, int x, int y) override;
     //virtual void idle() override;
-    virtual void display() override;
+    virtual void onWindowRefresh() override;
 };
 
 /////////////////////////////////////////////////////////////////////////
@@ -539,7 +539,7 @@ void MyWindow::processUI(int width, int height, double dt)
 
         int avg = 100;
 
-        if (s_profiler.getAveragedFrames() % avg == avg - 1) {
+        if (s_profiler.getTotalFrames() % avg == avg - 1) {
             s_profiler.getAveragedValues("frame", s_statsCpuTime, s_statsGpuTime);
         }
 
@@ -1013,11 +1013,11 @@ void buildRenderTargets(int w, int h)
 //------------------------------------------------------------------------------
 //
 //------------------------------------------------------------------------------
-bool MyWindow::create(int posX, int posY, int width, int height, const char* title, const nvgl::ContextFlagsGL &context)
+bool MyWindow::open(int posX, int posY, int width, int height, const char* title, const nvgl::ContextWindowCreateInfo &context)
 {
-	if(!AppWindowCameraInertia::create(posX, posY, width, height, title))
+	if(!AppWindowCameraInertia::open(posX, posY, width, height, title))
 		return false;
-  m_contextWindowGL.init(&context, this);
+  m_contextWindowGL.init(&context, m_internal, title);
   ImGui::InitGL();
   s_profiler.init();
 
@@ -1153,24 +1153,24 @@ bool MyWindow::create(int posX, int posY, int width, int height, const char* tit
   // --------------------------------------------
   // FBOs
   //
-  buildRenderTargets(m_windowSize[0], m_windowSize[1]);
+  buildRenderTargets(getWidth(), getHeight());
 
   m_validated = true;
   return true;
 }
 //------------------------------------------------------------------------------
-void MyWindow::shutdown()
+void MyWindow::onWindowClose()
 {
     s_profiler.deinit();
     ImGui::ShutdownGL();
-    AppWindowCameraInertia::shutdown();
+    AppWindowCameraInertia::onWindowClose();
     m_contextWindowGL.deinit();
 }
 
 //------------------------------------------------------------------------------
-void MyWindow::reshape(int w, int h)
+void MyWindow::onWindowResize(int w, int h)
 {
-    AppWindowCameraInertia::reshape(w, h);
+    AppWindowCameraInertia::onWindowResize(w, h);
     glMatrixMode(GL_PROJECTION);
     glLoadMatrixf(m_projection.mat_array);
     glMatrixMode(GL_MODELVIEW);
@@ -1183,9 +1183,9 @@ void MyWindow::reshape(int w, int h)
 
 //------------------------------------------------------------------------------
 #define KEYTAU 0.10f
-void MyWindow::keyboard(NVPWindow::KeyCode key, MyWindow::ButtonAction action, int mods, int x, int y)
+void MyWindow::onKeyboard(NVPWindow::KeyCode key, MyWindow::ButtonAction action, int mods, int x, int y)
 {
-    AppWindowCameraInertia::keyboard(key, action, mods, x, y);
+    AppWindowCameraInertia::onKeyboard(key, action, mods, x, y);
   if(action == MyWindow::BUTTON_RELEASE)
         return;
 
@@ -1200,9 +1200,9 @@ void MyWindow::keyboard(NVPWindow::KeyCode key, MyWindow::ButtonAction action, i
     }
 }
 //------------------------------------------------------------------------------
-void MyWindow::keyboardchar(unsigned char key, int mods, int x, int y)
+void MyWindow::onKeyboardChar(unsigned char key, int mods, int x, int y)
 {
-    AppWindowCameraInertia::keyboardchar(key, mods, x, y);
+    AppWindowCameraInertia::onKeyboardChar(key, mods, x, y);
     switch( key )
     {
         case '1':
@@ -1441,10 +1441,10 @@ void renderFullscreenQuad()
 }
 
 //------------------------------------------------------------------------------
-void MyWindow::display()
+void MyWindow::onWindowRefresh()
 {
-    AppWindowCameraInertia::display();
-    float dt = (float)m_realtime.getTiming();
+    AppWindowCameraInertia::onWindowRefresh();
+    float dt = (float)m_realtime.getFrameDT();
     //
     // Simple camera change for animation
     //
@@ -1526,13 +1526,13 @@ void MyWindow::display()
           // use the HW Blit to resolve MSAA to regular texture
           glDrawBuffers(1 , drawBuffers);
           // Render Target 1
-          blitFBONearest(FBO::TexMS_CMYA, FBO::Tex_CMYA, 0, 0, m_windowSize[0], m_windowSize[1], 0, 0, m_windowSize[0], m_windowSize[1]);
+          blitFBONearest(FBO::TexMS_CMYA, FBO::Tex_CMYA, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
           // Render Target 2
-          blitFBONearest(FBO::TexMS_KA, FBO::Tex_KA, 0, 0, m_windowSize[0], m_windowSize[1], 0, 0, m_windowSize[0], m_windowSize[1]);
+          blitFBONearest(FBO::TexMS_KA, FBO::Tex_KA, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
           // switch back to our backbuffer and perform the conversion to RGBA
           glBindFramebuffer(GL_FRAMEBUFFER, 0);
           g_progTex_CMYA_KA_2_RGBA.enable(); // using g_glslf_Tex_CMYA_KA_2_RGBA
-          g_progTex_CMYA_KA_2_RGBA.setUniform2i("viewportSz", m_windowSize[0], m_windowSize[1]);
+          g_progTex_CMYA_KA_2_RGBA.setUniform2i("viewportSz", getWidth(), getHeight());
           g_progTex_CMYA_KA_2_RGBA.setUniform4f("CMYK_Mask", g_activeC?1.0f:0.0f, g_activeM?1.0f:0.0f, g_activeY?1.0f:0.0f, g_activeK?1.0f:0.0f);
           g_progTex_CMYA_KA_2_RGBA.bindTexture("sampler_CMYA", Texture::CMYA, GL_TEXTURE_2D, 0);
           g_progTex_CMYA_KA_2_RGBA.bindTexture("sampler_KA", Texture::KA, GL_TEXTURE_2D, 1);
@@ -1542,7 +1542,7 @@ void MyWindow::display()
       case RESOLVEWITHSHADERTEX:
           glBindFramebuffer(GL_FRAMEBUFFER, 0);
           g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].enable(); // using g_glslf_TexMS_CMYA_KA_2_RGBA
-          g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform2i("viewportSz", m_windowSize[0], m_windowSize[1]);
+          g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform2i("viewportSz", getWidth(), getHeight());
           g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform4f("CMYK_Mask", g_activeC?1.0f:0.0f, g_activeM?1.0f:0.0f, g_activeY?1.0f:0.0f, g_activeK?1.0f:0.0f);
           g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindTexture("samplerMS_CMYA", Texture::MS_CMYA, GL_TEXTURE_2D_MULTISAMPLE, 0);
           g_progTexMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindTexture("samplerMS_KA", Texture::MS_KA, GL_TEXTURE_2D_MULTISAMPLE, 1);
@@ -1554,7 +1554,7 @@ void MyWindow::display()
       if(g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].getProgId())
       {
         g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].enable();
-        g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform2i("viewportSz", m_windowSize[0], m_windowSize[1]);
+        g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform2i("viewportSz", getWidth(), getHeight());
         g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].setUniform4f("CMYK_Mask", g_activeC?1.0f:0.0f, g_activeM?1.0f:0.0f, g_activeY?1.0f:0.0f, g_activeK?1.0f:0.0f);
         g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindImage("imageMS_CMYA", 0, Texture::MS_CMYA, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
         g_progImageMS_CMYA_KA_2_RGBA[g_CurMSAAColor].bindImage("imageMS_KA", 1, Texture::MS_KA, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
@@ -1566,7 +1566,7 @@ void MyWindow::display()
       }
           break;
       case RESOLVERGBATOBACKBUFFER:
-          blitFBONearest(FBO::TexMS_RGBA, 0/*backbuffer*/, 0, 0, m_windowSize[0], m_windowSize[1], 0, 0, m_windowSize[0], m_windowSize[1]);
+          blitFBONearest(FBO::TexMS_RGBA, 0/*backbuffer*/, 0, 0, getWidth(), getHeight(), 0, 0, getWidth(), getHeight());
           glBindFramebuffer(GL_FRAMEBUFFER, 0);
           break;
       }
@@ -1589,12 +1589,12 @@ void MyWindow::display()
 //
 int main(int argc, const char** argv)
 {
-    NVPWindow::System system(argv[0], PROJECT_NAME);
+    NVPSystem system(argv[0], PROJECT_NAME);
 
     // you can create more than only one
     static MyWindow myWindow;
 
-    nvgl::ContextFlagsGL context(
+    nvgl::ContextWindowCreateInfo context(
     4,      //major;
     3,      //minor;
     false,   //core;
@@ -1607,7 +1607,7 @@ int main(int argc, const char** argv)
     NULL   //share;
     );
 
-    if(!myWindow.create(0,0,1280, 720, "CMYK", context))
+    if(!myWindow.open(0,0,1280, 720, "CMYK", context))
     {
         LOGE("Failed to initialize the sample\n");
         return false;
@@ -1615,15 +1615,15 @@ int main(int argc, const char** argv)
 
     myWindow.m_contextWindowGL.makeContextCurrent();
     myWindow.m_contextWindowGL.swapInterval(0);
-    myWindow.reshape(myWindow.getWidth(), myWindow.getHeight());
+    myWindow.onWindowResize(myWindow.getWidth(), myWindow.getHeight());
   
-    while (MyWindow::sysPollEvents(false))
+    while (myWindow.pollEvents())
     {
       myWindow.idle();
       if(myWindow.m_renderCnt > 0)
       {
           myWindow.m_renderCnt--;
-          myWindow.display();
+          myWindow.onWindowRefresh();
       }
 
       if (myWindow.m_guiRegistry.checkValueChange(COMBO_MSAACOL))
@@ -1646,5 +1646,5 @@ int main(int argc, const char** argv)
           }
       }
     }
-    return true;
+    return 0;
 }
