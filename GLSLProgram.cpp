@@ -33,7 +33,7 @@
 #include "nvh/nvprint.hpp"
 #include "GLSLProgram.h"
 
-char* GLSLProgram::incPaths[] = {"/"};
+char const * GLSLProgram::incPaths[] = {"/"};
 
 bool GLSLProgram::setIncludeFromFile(const char *includeName, const char* filename)
 {

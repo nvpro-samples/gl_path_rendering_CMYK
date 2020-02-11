@@ -78,7 +78,7 @@ private:
     char *curVSName, *curFSName, *curGSName, *curProgName;
 
 	GLuint mProg;
-    static char* incPaths[];
+    static char const* incPaths[];
 };
 
 #endif

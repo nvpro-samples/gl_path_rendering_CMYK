@@ -1015,7 +1015,7 @@ void buildRenderTargets(int w, int h)
 //------------------------------------------------------------------------------
 bool MyWindow::open(int posX, int posY, int width, int height, const char* title, const nvgl::ContextWindowCreateInfo &context)
 {
-	if(!AppWindowCameraInertia::open(posX, posY, width, height, title))
+  if(!AppWindowCameraInertia::open(posX, posY, width, height, title, true))
 		return false;
   m_contextWindowGL.init(&context, m_internal, title);
   ImGui::InitGL();
