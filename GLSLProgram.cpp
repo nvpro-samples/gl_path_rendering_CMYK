@@ -131,9 +131,10 @@ GLSLProgram::~GLSLProgram()
 	if (mProg) {
 		glDeleteProgram(mProg);
 	}
-    if(curVSName) free(curVSName);
-    if(curFSName) free(curFSName);
-    if(curGSName) free(curGSName);
+	if (curVSName) free(curVSName);
+	if (curFSName) free(curFSName);
+	if (curGSName) free(curGSName);
+	if (curProgName) free(curProgName);
 }
 
 void

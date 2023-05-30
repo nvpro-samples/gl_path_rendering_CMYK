@@ -1083,6 +1083,8 @@ bool MyWindow::open(int posX, int posY, int width, int height, const char* title
 #define SUBDIVS 180
 #define CIRCLESZ 0.5f
   vec3f* data = new vec3f[SUBDIVS + 2];
+  if (!data)
+    return false;
   vec3f* p    = data;
   int    j    = 0;
   *(p++)      = vec3f(0, 0, 0);
@@ -1094,6 +1096,7 @@ bool MyWindow::open(int posX, int posY, int width, int height, const char* title
   }
   glBufferData(GL_ARRAY_BUFFER, sizeof(vec3f) * (SUBDIVS + 2), data[0].vec_array, GL_STATIC_DRAW);
   glBindBuffer(GL_ARRAY_BUFFER, 0);
+  delete[] data;
   //
   // NV-Path rendering
   //
