@@ -16,7 +16,10 @@
  * SPDX-FileCopyrightText: Copyright (c) 2018-2021 NVIDIA CORPORATION
  * SPDX-License-Identifier: Apache-2.0
  */
- //--------------------------------------------------------------------
+//--------------------------------------------------------------------
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
 #include "GLSLProgram.h"
 #include "nvgl/contextwindow_gl.hpp"
 #include "nvgl/extensions_gl.hpp"
@@ -31,23 +34,23 @@
 //
 struct CameraAnim
 {
-  vec3f eye, focus;
+  glm::vec3 eye, focus;
 };
 static CameraAnim s_cameraAnim[] = {
-    {vec3f(-1.26, 0.47, 1.01), vec3f(-0.96, 0.47, 0.00)},
-    {vec3f(0.38, 0.34, 0.43), vec3f(0.37, 0.35, 0.14)},
-    {vec3f(1.58, 0.54, 0.65), vec3f(0.65, 0.56, -0.06)},
-    {vec3f(1.07, -1.91, 4.75), vec3f(0.07, -0.50, 0.22)},
-    {vec3f(-3.41, 0.39, 2.76), vec3f(-0.96, -0.33, -0.28)},
-    {vec3f(-0.94, -0.15, 0.69), vec3f(-0.96, -0.33, -0.28)},
-    {vec3f(-0.25, -0.18, 0.67), vec3f(-0.27, -0.36, -0.29)},
-    {vec3f(0.79, -0.26, 0.66), vec3f(0.77, -0.43, -0.30)},
-    {vec3f(0.38, -0.98, 0.79), vec3f(0.36, -1.15, -0.16)},
-    {vec3f(-1.46, -1.48, 0.05), vec3f(-0.58, -1.12, -0.41)},
-    {vec3f(-1.64, -0.70, 0.30), vec3f(-0.76, -0.35, -0.16)},
-    {vec3f(-1.13, -0.66, 1.39), vec3f(-0.76, -0.35, -0.16)},
-    {vec3f(-0.20, -0.65, 3.05), vec3f(-0.20, -0.45, -0.11)},
-    {vec3f(0.00, 0.00, 3.00), vec3f(0.00, 0.00, 0.00)},  //14 items
+    {glm::vec3(-1.26, 0.47, 1.01), glm::vec3(-0.96, 0.47, 0.00)},
+    {glm::vec3(0.38, 0.34, 0.43), glm::vec3(0.37, 0.35, 0.14)},
+    {glm::vec3(1.58, 0.54, 0.65), glm::vec3(0.65, 0.56, -0.06)},
+    {glm::vec3(1.07, -1.91, 4.75), glm::vec3(0.07, -0.50, 0.22)},
+    {glm::vec3(-3.41, 0.39, 2.76), glm::vec3(-0.96, -0.33, -0.28)},
+    {glm::vec3(-0.94, -0.15, 0.69), glm::vec3(-0.96, -0.33, -0.28)},
+    {glm::vec3(-0.25, -0.18, 0.67), glm::vec3(-0.27, -0.36, -0.29)},
+    {glm::vec3(0.79, -0.26, 0.66), glm::vec3(0.77, -0.43, -0.30)},
+    {glm::vec3(0.38, -0.98, 0.79), glm::vec3(0.36, -1.15, -0.16)},
+    {glm::vec3(-1.46, -1.48, 0.05), glm::vec3(-0.58, -1.12, -0.41)},
+    {glm::vec3(-1.64, -0.70, 0.30), glm::vec3(-0.76, -0.35, -0.16)},
+    {glm::vec3(-1.13, -0.66, 1.39), glm::vec3(-0.76, -0.35, -0.16)},
+    {glm::vec3(-0.20, -0.65, 3.05), glm::vec3(-0.20, -0.45, -0.11)},
+    {glm::vec3(0.00, 0.00, 3.00), glm::vec3(0.00, 0.00, 0.00)},  //14 items
 };
 static int s_cameraAnimItem  = 0;
 static int s_cameraAnimItems = 14;
@@ -151,10 +154,10 @@ static const char* g_glslv_Tc =
   "                   1-min(1.0, (CMYK.z)+(CMYK.w)) );\n"                                                              \
   "   return cmy;\n"                                                                                                   \
   "}\n"
-inline vec3f convertCMYK2RGB(vec4f CMYK)
+inline glm::vec3 convertCMYK2RGB(glm::vec4 CMYK)
 {
-  return vec3f(1 - nv_min(1.0f, (CMYK.x) + (CMYK.w)), 1 - nv_min(1.0f, (CMYK.y) + (CMYK.w)),
-               1 - nv_min(1.0f, (CMYK.z) + (CMYK.w)));
+  return glm::vec3(1 - glm::min(1.0f, (CMYK.x) + (CMYK.w)), 1 - glm::min(1.0f, (CMYK.y) + (CMYK.w)),
+                   1 - glm::min(1.0f, (CMYK.z) + (CMYK.w)));
 }
 
 
@@ -502,7 +505,7 @@ void MyWindow::processUI(int width, int height, double dt)
     ImGui::Separator();
     ImGui::Text("('h' to toggle help)");
     //if(s_bStats)
-    //    h += m_oglTextBig.drawString(5, m_winSz[1]-h, hudStats.c_str(), 0, vec4f(0.8,0.8,1.0,0.5).vec_array);
+    //    h += m_oglTextBig.drawString(5, m_winSz[1]-h, hudStats.c_str(), 0, glm::vec4(0.8,0.8,1.0,0.5).vec_array);
 
     if(s_helpText)
     {
@@ -1004,7 +1007,7 @@ bool MyWindow::open(int posX, int posY, int width, int height, const char* title
   s_profiler.init();
 
 
-  m_camera.curEyePos = m_camera.eyePos = vec3f(0, 0, 3.0f);
+  m_camera.curEyePos = m_camera.eyePos = glm::vec3(0, 0, 3.0f);
   LOGI("'1': Blit used for MSAA resolve");
   LOGI("'2': TexelFetch used on MSAA Texture to resolve");
   LOGI("'3': ImageLoad used on MSAA Texture to resolve");
@@ -1082,19 +1085,19 @@ bool MyWindow::open(int posX, int posY, int width, int height, const char* title
   glBindBuffer(GL_ARRAY_BUFFER, g_vboCircle);
 #define SUBDIVS 180
 #define CIRCLESZ 0.5f
-  vec3f* data = new vec3f[SUBDIVS + 2];
-  if (!data)
+  glm::vec3* data = new glm::vec3[SUBDIVS + 2];
+  if(!data)
     return false;
-  vec3f* p    = data;
-  int    j    = 0;
-  *(p++)      = vec3f(0, 0, 0);
+  glm::vec3* p = data;
+  int        j = 0;
+  *(p++)       = glm::vec3(0, 0, 0);
   for(int i = 0; i < SUBDIVS + 1; i++)
   {
-    float a = nv_to_rad * (float)i * (360.0f / (float)SUBDIVS);
-    vec3f v(CIRCLESZ * cosf(a), CIRCLESZ * sinf(a), 0.0f);
+    float     a = glm::radians((float)i * (360.0f / (float)SUBDIVS));
+    glm::vec3 v(CIRCLESZ * cosf(a), CIRCLESZ * sinf(a), 0.0f);
     *(p++) = v;
   }
-  glBufferData(GL_ARRAY_BUFFER, sizeof(vec3f) * (SUBDIVS + 2), data[0].vec_array, GL_STATIC_DRAW);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3) * (SUBDIVS + 2), glm::value_ptr(data[0]), GL_STATIC_DRAW);
   glBindBuffer(GL_ARRAY_BUFFER, 0);
   delete[] data;
   //
@@ -1158,7 +1161,7 @@ void MyWindow::onWindowResize(int w, int h)
 {
   AppWindowCameraInertia::onWindowResize(w, h);
   glMatrixMode(GL_PROJECTION);
-  glLoadMatrixf(m_projection.mat_array);
+  glLoadMatrixf(glm::value_ptr(m_projection));
   glMatrixMode(GL_MODELVIEW);
   //
   // rebuild the FBOs to match the new size
@@ -1237,17 +1240,17 @@ void beginCircles()
     g_prog_Cst_OneMinusCMYK_A.enable();  // using g_glslf_OneMinusCMYK_A
   glBindBuffer(GL_ARRAY_BUFFER, g_vboCircle);
   glEnableVertexAttribArray(0);
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(vec3f), NULL);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), NULL);
 }
-void drawFilledCircle(mat4f mWVP, vec3f& p, float scale, vec4f& CMYK, float alpha)
+void drawFilledCircle(glm::mat4 mWVP, glm::vec3& p, float scale, glm::vec4& CMYK, float alpha)
 {
-  mWVP.translate(p);
-  mWVP.scale(scale);
-  g_prog_Cst_OneMinusCMYK_A.setUniformMatrix4fv("mWVP", mWVP.mat_array, false);
+  mWVP = glm::translate(mWVP, p);
+  mWVP = glm::scale(mWVP, glm::vec3(scale));
+  g_prog_Cst_OneMinusCMYK_A.setUniformMatrix4fv("mWVP", glm::value_ptr(mWVP), false);
   g_prog_Cst_OneMinusCMYK_A.setUniform1f("alpha", alpha);
   if(mrtMode == RENDER1STEPRGBA)  // in RGBA, only provide the simple rendering to one render-target, using RGBA
   {
-    vec3f RGB = convertCMYK2RGB(CMYK);
+    glm::vec3 RGB = convertCMYK2RGB(CMYK);
     g_prog_Cst_RGBA.setUniform4f("RGBA", RGB[0], RGB[1], RGB[2], alpha);
     glDrawArrays(GL_TRIANGLE_FAN, 0, SUBDIVS + 2);
     g_prog_Cst_RGBA.setUniform4f("RGBA", 0.0f, 0.0f, 0.0f, alpha);
@@ -1295,16 +1298,16 @@ void endCircles()
 // simple path object
 // http://developer.download.nvidia.com/assets/gamedev/files/GL_NV_path_rendering.txt
 //
-void beginPath(mat4f& mWV)
+void beginPath(glm::mat4& mWV)
 {
   glEnable(GL_STENCIL_TEST);
-  glLoadMatrixf(mWV.mat_array);
+  glLoadMatrixf(glm::value_ptr(mWV));
   if(mrtMode == RENDER1STEPRGBA)  // in RGBA, only provide the simple rendering to one render-target, using RGBA
     g_progPR_Cst_RGBA.enable();
   else
     g_progPR_Cst_OneMinusCMYK_A.enable();
 }
-void drawPath(vec3f& p, float scale, vec4f& CMYK, float alpha)
+void drawPath(glm::vec3& p, float scale, glm::vec4& CMYK, float alpha)
 {
   glDisableVertexAttribArray(0);
   glPushMatrix();
@@ -1316,7 +1319,7 @@ void drawPath(vec3f& p, float scale, vec4f& CMYK, float alpha)
   glStencilFunc(GL_NOTEQUAL, /*stencil_ref*/ 0, /*read_mask*/ 0xFF);
   if(mrtMode == RENDER1STEPRGBA)  // in RGBA, only provide the simple rendering to one render-target, using RGBA
   {
-    vec3f RGB = convertCMYK2RGB(CMYK);
+    glm::vec3 RGB = convertCMYK2RGB(CMYK);
     g_progPR_Cst_RGBA.setUniform4f("RGBA", RGB[0], RGB[1], RGB[2], alpha);
     glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO);  // sfail: s failed, dpfail: s passed/d failed, dppass: s and d passed
     glCoverFillPathNV(g_pathObj, GL_CONVEX_HULL_NV);
@@ -1382,8 +1385,9 @@ void endPath()
 void MyWindow::renderScene()
 {
   PROFILE_SECTION(__FUNCTION__);
-  static vec4f colorsCMYK[] = {vec4f(1, 1, 0, 0.0), vec4f(0, 1, 1, 0.0), vec4f(1, 0, 1, 0.0),    vec4f(1, 0, 0, 0.0),
-                               vec4f(0, 1, 0, 0.0), vec4f(0, 0, 1, 0.0), vec4f(0.4f, 0, 1, 0.4f)};
+  static glm::vec4 colorsCMYK[] = {glm::vec4(1, 1, 0, 0.0),    glm::vec4(0, 1, 1, 0.0), glm::vec4(1, 0, 1, 0.0),
+                                   glm::vec4(1, 0, 0, 0.0),    glm::vec4(0, 1, 0, 0.0), glm::vec4(0, 0, 1, 0.0),
+                                   glm::vec4(0.4f, 0, 1, 0.4f)};
   if(g_pathObj && g_usePathObj)
   {
     // m_projection is already in glMatrixMode(GL_PROJECTION)
@@ -1393,7 +1397,7 @@ void MyWindow::renderScene()
       for(int y = 0; y < g_NObjs; y++)
         for(int x = 0; x < g_NObjs; x++)
         {
-          vec3f p(-1.0f + 2.0f * (float)x / (float)g_NObjs, -1.0f + 2.0f * (float)y / (float)g_NObjs, 0);
+          glm::vec3 p(-1.0f + 2.0f * (float)x / (float)g_NObjs, -1.0f + 2.0f * (float)y / (float)g_NObjs, 0);
           drawPath(p, 1.0f, colorsCMYK[c], g_alpha);
           c = (c + 1) % 7;
         }
@@ -1402,7 +1406,7 @@ void MyWindow::renderScene()
   }
   else
   {
-    mat4f mVP;
+    glm::mat4 mVP;
     mVP = m_projection * m_camera.m4_view;
     beginCircles();
     {
@@ -1410,7 +1414,7 @@ void MyWindow::renderScene()
       for(int y = 0; y < g_NObjs; y++)
         for(int x = 0; x < g_NObjs; x++)
         {
-          vec3f p(-1.0f + 2.0f * (float)x / (float)g_NObjs, -1.0f + 2.0f * (float)y / (float)g_NObjs, 0);
+          glm::vec3 p(-1.0f + 2.0f * (float)x / (float)g_NObjs, -1.0f + 2.0f * (float)y / (float)g_NObjs, 0);
           drawFilledCircle(mVP, p, 1.0f, colorsCMYK[c], g_alpha);
           c = (c + 1) % 7;
         }
@@ -1459,7 +1463,7 @@ void MyWindow::onWindowRefresh()
     // Render with some CMYK colored primitives into a 2-render target destination
     // the result will be stored in 1-(value)
     //
-    const vec4f bgngCMYK(0.0f, 0.0f, 0.0f, 0.0f);
+    const glm::vec4 bgngCMYK(0.0f, 0.0f, 0.0f, 0.0f);
     glDisable(GL_DEPTH_TEST);
 
     // Blending
